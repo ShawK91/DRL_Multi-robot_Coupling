@@ -7,7 +7,6 @@ import numpy as np, torch
 import torch.nn.functional as F
 from scipy.special import expit
 import fastrand, math
-from random_process import OrnsteinUhlenbeckProcess
 from torch.optim import Adam
 
 from ReplayBuffer import ReplayBuffer
@@ -19,37 +18,27 @@ class DDPG(object):
         self.args = args
 
         # Create Actor and Critic Network
-        self.ac = Actor_Critic(args.state_dim, args.action_dim)
+        self.ac = Actor_Critic(args.state_dim, args.action_dim, args)
 
         #Optimizers
-        self.actor_optim = Adam(self.ac.parameters(), lr=0.001)
-        self.critic_optim = Adam(self.ac.parameters(), lr=0.001)
+        self.actor_optim = Adam(self.ac.parameters(), lr=args.actor_lr)
+        self.critic_optim = Adam(self.ac.parameters(), lr=args.critic_lr)
 
         # Create replay buffer
-        self.replay_buffer = ReplayBuffer(100000, 1234)
-        self.random_process = OrnsteinUhlenbeckProcess(size=args.action_dim, theta=0.15, mu=0.2, sigma=0.0)
+        self.replay_buffer = ReplayBuffer(1000000, 1234)
 
         # Hyper-parameters
         self.batch_size = args.batch_size
         #self.tau = args.tau
         self.discount = args.discount
         #self.depsilon = 1.0 / args.epsilon
-        self.criterion = nn.MSELoss()
-
-        self.epsilon = 1.0
-        self.s_t = None  # Most recent state
-        self.a_t = None  # Most recent action
-        self.is_training = True
-
+        self.criterion = nn.SmoothL1Loss()
 
     def sample_memory(self, batch_size):
         minibatch = random.sample(self.memory, batch_size)
         minibatch = np.array(minibatch)
         states, actions, rewards, next_states = minibatch[:,0:1], minibatch[:,1:2], minibatch[:,2:3], minibatch[:,3:]
         return np.array(states), np.array(actions), np.array(rewards), np.array(next_states)
-
-
-
 
     def batch_bck_update_policy(self):
         # Sample batch
@@ -78,42 +67,62 @@ class DDPG(object):
         policy_loss.backward()
         self.actor_optim.step()
 
-
-    def update_policy(self):
+    def update_actor(self):
         # Sample batch
-        states_batch, actions_batch, rewards_batch, next_states_batch = self.replay_buffer.sample_batch(batch_size=5)  # self.sample_memory(batch_size = 50)
+        states_batch, actions_batch, rewards_batch, next_states_batch = self.replay_buffer.sample_batch(batch_size=self.args.batch_size)
 
-        # Update based on one example at a time
-        for state, action, reward, next_state in zip(states_batch, actions_batch, rewards_batch, next_states_batch):
+        for epoch in range(self.args.actor_epoch):
 
-            state = to_tensor(state); action = to_tensor(action); reward = to_tensor(reward); next_state = to_tensor(next_state)
+            #self.ac.w_critic2.require_grad = False; self.ac.w_critic1.require_grad = False
 
-            # Prepare for the target q batch
-            #next_state.volatile = True
-            next_action = self.ac.actor_forward(next_state)
-            next_q_value = self.ac.critic_forward(next_state, next_action)
-            #next_q_value.volatile = False
+            # Update based on one example at a time
+            for state, _,_,_ in zip(states_batch, actions_batch, rewards_batch, next_states_batch):
 
-            target_qval = reward + self.discount * next_q_value
-            target_qval = to_tensor(to_numpy(target_qval))
+                state = to_tensor(state);# action = to_tensor(action); reward = to_tensor(reward); next_state = to_tensor(next_state)
+                action_T = self.ac.actor_forward(state)
+                policy_loss = -self.ac.critic_forward(state, action_T)
+                policy_loss = policy_loss.mean()
+                policy_loss.backward()
+               # print to_numpy(policy_loss), to_numpy(action_T).flatten()
 
-
-            # Critic update
-            self.ac.zero_grad()
-            qval = self.ac.critic_forward(state, action)
-            value_loss = self.criterion(qval, target_qval)
-            value_loss.backward() #TODO CHECK
-            self.critic_optim.step()
-
-            # Actor update
-            self.ac.zero_grad()
-            state = to_tensor(to_numpy(state))
-            #action = to_tensor(to_numpy(action))
-
-            policy_loss = -self.ac.critic_forward(state, self.ac.actor_forward(state))
-            policy_loss = policy_loss.mean()
-            policy_loss.backward()
+            #self.ac.w_critic2.grad.data *= 0; self.ac.w_critic1.grad.data *= 0; self.ac.fc2.grad.data *= 0
             self.actor_optim.step()
+            self.ac.zero_grad()
+
+
+    def update_critic(self):
+        # Sample batch
+        states_batch, actions_batch, rewards_batch, next_states_batch = self.replay_buffer.sample_batch(batch_size=self.args.batch_size)
+
+        for epoch in range(self.args.critic_epoch):
+
+            # Update based on one example at a time
+            for state, action, reward, next_state in zip(states_batch, actions_batch, rewards_batch, next_states_batch):
+
+                state = to_tensor(state); action = to_tensor(action); reward = to_tensor(reward); next_state = to_tensor(next_state)
+
+                # Prepare for the target q batch
+                #next_state.volatile = True
+                next_action = self.ac.actor_forward(next_state)
+                next_q_value = self.ac.critic_forward(next_state, next_action)
+                #next_q_value.volatile = False
+
+                target_qval = reward + self.discount * next_q_value
+                target_qval = to_tensor(to_numpy(target_qval))
+
+
+                # Critic update
+                qval = self.ac.critic_forward(state, action)
+                value_loss = self.criterion(qval, target_qval)
+                value_loss.backward()
+
+
+                self.critic_optim.step()
+                self.ac.zero_grad()
+                #print to_numpy(value_loss)
+            #print
+
+
 
 
 
@@ -165,47 +174,62 @@ class DDPG(object):
 
 
 class Actor_Critic(nn.Module):
-    def __init__(self, num_input, num_actions, num_hid = 50, num_mem=50):
+    def __init__(self, num_input, num_actions, args):
         super(Actor_Critic, self).__init__()
-
+        self.args = args
 
         #Shared layers
-        self.fc1 = Parameter(torch.rand(num_hid, num_input), requires_grad=1)
-        self.mmu = GD_MMU(num_hid, num_hid, num_mem, num_hid)
+        self.fc1 = Parameter(torch.rand(args.num_hnodes, num_input), requires_grad=1)
+        self.fc2 = Parameter(torch.rand(args.num_hnodes, num_input), requires_grad=1)
+
+        #self.mmu = GD_MMU(args.num_hnodes, args.num_hnodes, args.num_mem, args.num_hnodes)
 
         #Actor
-        self.w_actor = Parameter(torch.rand(num_actions, num_hid), requires_grad=1)
+        self.w_actor1 = Parameter(torch.rand(num_actions, args.num_hnodes), requires_grad=1)
+        #self.w_actor2 = Parameter(torch.rand(num_actions, args.num_hnodes), requires_grad=1)
 
         #Critic
-        self.w_critic = Parameter(torch.rand(1, num_hid+num_actions), requires_grad=1)
+        self.w_critic1 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        self.w_critic2 = Parameter(torch.rand(1, args.num_hnodes + num_actions), requires_grad=1)
 
         for param in self.parameters():
-            # torch.nn.init.xavier_normal(param)
+            #torch.nn.init.xavier_normal(param)
             # torch.nn.init.orthogonal(param)
             # torch.nn.init.sparse(param, sparsity=0.5)
-            torch.nn.init.kaiming_normal(param)
+            #torch.nn.init.kaiming_normal(param)
+            param.data = fanin_init(param.data.size())
         self.cuda()
 
     def actor_forward(self, state):
-        out = F.relu6(self.fc1.mm(state))
+        out = F.leaky_relu(self.fc1.mm(state))
         #out = self.mmu.forward(out)
-        out = F.relu6(out)
-        out = self.w_actor.mm(out)
-        out = F.relu6(out)
+        #out = F.tanh(out)
+
+        out = F.tanh(self.w_actor1.mm(out))
+        #out = self.w_actor2.mm(out)
+        #out = F.tanh(out)
         return out
 
     def critic_forward(self, state, action):
-        out = F.relu6(self.fc1.mm(state))
+        out = F.leaky_relu(self.fc2.mm(state))
         #out = self.mmu.forward(out)
-        out = F.relu6(out)
+        #out = F.tanh(out)
+
+        out = F.leaky_relu(self.w_critic1.mm(out))
         out = torch.cat([out,action],0)
-        out = self.w_critic.mm(out)
+        out = self.w_critic2.mm(out)
+        out = F.sigmoid(out)
         return out
 
     def reset(self, batch_size=1):
-        self.mmu.reset(batch_size)
+        #self.mmu.reset(batch_size)
+        None
 
 
+def fanin_init(size, fanin=None):
+    fanin = fanin or size[0]
+    v = 1. / np.sqrt(fanin)
+    return torch.Tensor(size).uniform_(-v, v)
 
 def to_numpy(var):
     return var.cpu().data.numpy()
@@ -214,7 +238,26 @@ def to_tensor(ndarray, volatile=False, requires_grad=False):
     return Variable(torch.from_numpy(ndarray).float(), volatile=volatile, requires_grad=requires_grad).cuda()
 
 
+class OrnsteinUhlenbeckActionNoise:
+    def __init__(self, mu, sigma=0.2, theta=.15, dt=1e-2, x0=None):
+        self.theta = theta
+        self.mu = mu
+        self.sigma = sigma
+        self.dt = dt
+        self.x0 = x0
+        self.reset()
 
+    def __call__(self):
+        x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + \
+                self.sigma * np.sqrt(self.dt) * np.random.normal(size=self.mu.shape)
+        self.x_prev = x
+        return x
+
+    def reset(self):
+        self.x_prev = self.x0 if self.x0 is not None else np.zeros_like(self.mu)
+
+    def __repr__(self):
+        return 'OrnsteinUhlenbeckActionNoise(mu={}, sigma={})'.format(self.mu, self.sigma)
 
 class GD_MMU(nn.Module):
     def __init__(self, input_size, hidden_size, memory_size, output_size):

@@ -29,19 +29,19 @@ class Parameters:
     def __init__(self):
 
         #NN specifics
-        self.num_hnodes = self.num_mem = 50
+        self.num_hnodes = self.num_mem = 100
 
         # Train data
-        self.batch_size = 1
+        self.batch_size = 10000
         self.num_episodes = 1000000
         self.actor_epoch = 1; self.actor_lr = 0.005
         self.critic_epoch = 1; self.critic_lr = 0.005
 
 
         #Rover domain
-        self.dim_x = self.dim_y = 7; self.obs_radius = 20.0; self.act_dist = 0.1; self.angle_res = 30
-        self.num_poi = 1; self.num_rover = 1; self.num_timestep = 15
-        self.poi_rand = 0
+        self.dim_x = self.dim_y = 8; self.obs_radius = 20.0; self.act_dist = 0.1; self.angle_res = 10
+        self.num_poi = 5; self.num_rover = 1; self.num_timestep = 20
+        self.poi_rand = 1
 
         #Dependents
         self.state_dim = 720 / self.angle_res #+ 2
@@ -52,6 +52,9 @@ class Parameters:
 
         self.save_foldername = 'R_Block/'
         if not os.path.exists(self.save_foldername): os.makedirs(self.save_foldername)
+
+        #unit tests
+        self.unit_test = 0
 
 class Task_Rovers:
     def __init__(self, parameters):
@@ -66,8 +69,9 @@ class Task_Rovers:
 
     def reset_poi_pos(self):
 
-        self.poi_pos[0] = [0,1]; return #TODO
-
+        if self.params.unit_test == 1: #Unit_test
+            self.poi_pos[0] = [0,1]
+            return
 
         start = 1.0;
         end = self.dim_x - 1.0
@@ -110,14 +114,13 @@ class Task_Rovers:
         self.poi_status = self.poi_status = [False for _ in range(self.params.num_poi)]
 
     def reset_rover_pos(self):
-
-
-
         start = 1.0; end = self.dim_x - 1.0
         rad = int(self.dim_x / math.sqrt(3) / 2.0)
         center = int((start + end) / 2.0)
 
-        self.rover_pos[0] = [end,0]; return #
+        if self.params.unit_test == 1: #Unit test
+            self.rover_pos[0] = [end,0];
+            return
 
         for rover_id in range(self.params.num_rover):
                 quadrant = rover_id % 4
@@ -152,7 +155,7 @@ class Task_Rovers:
 
         # Log all distance into brackets for food
         for loc, status in zip(self.poi_pos, self.poi_status):
-            #if status == True: continue #If accessed ignore #TODO
+            if status == True: continue #If accessed ignore #TODO
 
             x1 = loc[0] - self_x; x2 = -1.0
             y1 = loc[1] - self_y; y2 = 0.0
@@ -203,7 +206,7 @@ class Task_Rovers:
         #Check for reward
         reward = 0.0
         for i, loc in enumerate(self.poi_pos):
-            #if self.poi_status[i]== True: continue #Ignore POIs that have been harvested already
+            if self.poi_status[i]== True: continue #Ignore POIs that have been harvested already
 
             x1 = loc[0] - self.rover_pos[rover_id][0]; y1 = loc[1] - self.rover_pos[rover_id][1]
             dist = math.sqrt(x1 * x1 + y1 * y1)
@@ -388,8 +391,8 @@ if __name__ == "__main__":
 
 
         if episode % 200 == 0: test_env(env, agent, parameters)
-        if episode % 50 == 0: v_check(env, agent.ac, parameters)
-        if episode % 50 == 0: actor_check(env, agent.ac, parameters)
+        #if episode % 50 == 0: v_check(env, agent.ac, parameters)
+        #if episode % 50 == 0: actor_check(env, agent.ac, parameters)
 
 
 

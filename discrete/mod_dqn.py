@@ -30,9 +30,7 @@ class DDPG(object):
 
         # Hyper-parameters
         self.batch_size = args.batch_size
-        #self.tau = args.tau
         self.gamma = args.gamma
-        #self.depsilon = 1.0 / args.epsilon
         self.criterion = nn.MSELoss() #nn.SmoothL1Loss()
 
     def sample_memory(self, batch_size):
@@ -70,15 +68,16 @@ class DDPG(object):
 
     def update_actor(self):
         # Sample batch
-        states, new_states, actions, _ = self.replay_buffer.sample_batch(batch_size=self.args.batch_size)
+        states, new_states, actions, rewards = self.replay_buffer.sample_batch(batch_size=self.args.batch_size)
         if len(states) == 0: return
         states = torch.cat(states,1); new_states = torch.cat(new_states,1)
 
         vals = self.ac.critic_forward(states)
         new_vals = self.ac.critic_forward(new_states)
+        rewards = to_tensor(np.array(rewards))
         action_logs = self.ac.actor_forward(states)
 
-        dt = new_vals - vals
+        dt = rewards + self.gamma * new_vals - vals
         dt = to_tensor(to_numpy(dt))
 
         alogs = []
@@ -90,7 +89,7 @@ class DDPG(object):
         for epoch in range(self.args.actor_epoch):
             policy_loss =  -(dt * alogs)
             policy_loss = policy_loss.mean()
-            policy_loss.backward(retain_graph = True)
+            policy_loss.backward()
             torch.nn.utils.clip_grad_norm(self.ac.parameters(), 40)
             self.actor_optim.step()
             self.ac.zero_grad()
@@ -204,14 +203,15 @@ class Actor_Critic(nn.Module):
 
     def actor_forward(self, state):
         out = F.tanh(self.fc1.mm(state))
-        #state = state.t().unsqueeze(2)
-        #out = F.relu(self.actor_conv1(state).squeeze(2).t())
+
+        # state = state.t().unsqueeze(2)
+        # out = F.relu(self.actor_conv1(state).squeeze(2).t())
         #out = F.relu(self.actor_conv2(F.relu(self.actor_conv1(state)))).squeeze(2).t()
 
         out = self.w_actor1.mm(out)
         #out = self.w_actor2.mm(out)
-        #out = F.tanh(out)
-        #out = F.relu6(out)
+        out = F.sigmoid(out)
+        #out = torch.clamp(out, min=0.001)
         out = F.log_softmax(out, dim=0)
         return out
 
