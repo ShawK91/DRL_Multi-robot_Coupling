@@ -39,12 +39,12 @@ class Parameters:
 
 
         #Rover domain
-        self.dim_x = self.dim_y = 8; self.obs_radius = 20.0; self.act_dist = 0.1; self.angle_res = 10
-        self.num_poi = 5; self.num_rover = 1; self.num_timestep = 20
+        self.dim_x = self.dim_y = 10; self.obs_radius = 20; self.act_dist = 0.1; self.angle_res = 10
+        self.num_poi = 5; self.num_rover = 1; self.num_timestep = 15
         self.poi_rand = 1
 
         #Dependents
-        self.state_dim = 720 / self.angle_res #+ 2
+        self.state_dim = 4*360 / self.angle_res #+ 2
         self.action_dim = 5
         self.epsilon = 0.5
         self.alpha = 0.9
@@ -146,31 +146,56 @@ class Task_Rovers:
     def get_state(self, rover_id):
         #return mod.unsqueeze(np.array([self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]]), 1)
 
-
-
         self_x = self.rover_pos[rover_id][0]; self_y = self.rover_pos[rover_id][1]
 
-        state = np.zeros(((360 / self.params.angle_res), 2))  # FORMAT: [bracket] = (drone_avg_dist, drone_number, food_avg_dist, food_number_item, reward ......]
+        state = np.zeros(((360 / self.params.angle_res), 4))  # FORMAT: [bracket] = (drone_avg_dist, drone_number, food_avg_dist, food_number_item, reward ......]
         temp_poi_dist_list = [[] for _ in xrange(360 / self.params.angle_res)]
+        temp_rover_dist_list = [[] for _ in xrange(360 / self.params.angle_res)]
 
-        # Log all distance into brackets for food
+        # Log all distance into brackets for POIs
         for loc, status in zip(self.poi_pos, self.poi_status):
-            if status == True: continue #If accessed ignore #TODO
+            if status == True: continue #If accessed ignore
 
             x1 = loc[0] - self_x; x2 = -1.0
             y1 = loc[1] - self_y; y2 = 0.0
             angle, dist = self.get_angle_dist(x1, y1, x2, y2)
+            if dist > self.params.obs_radius: continue #Observability radius
+
             bracket = int(angle / self.params.angle_res)
             temp_poi_dist_list[bracket].append(dist)
 
+        # Log all distance into brackets for other drones
+        for id, loc, in enumerate(self.rover_pos):
+            if id == rover_id: continue #Ignore self
+
+            x1 = loc[0] - self_x; x2 = -1.0
+            y1 = loc[1] - self_y; y2 = 0.0
+            angle, dist = self.get_angle_dist(x1, y1, x2, y2)
+            if dist > self.params.obs_radius: continue #Observability radius
+
+            bracket = int(angle / self.params.angle_res)
+            temp_rover_dist_list[bracket].append(dist)
+
+
         ####Encode the information onto the state
         for bracket in range(int(360 / self.params.angle_res)):
-            # Drones
+            # POIs
             state[bracket][1] = len(temp_poi_dist_list[bracket])
             if state[bracket][1] > 0:
                 state[bracket][0] = sum(temp_poi_dist_list[bracket]) / len(temp_poi_dist_list[bracket])
             else:
                 state[bracket][0] = -1
+
+            #Rovers
+            state[bracket][3] = len(temp_rover_dist_list[bracket])
+            if state[bracket][3] > 0:
+                state[bracket][2] = sum(temp_rover_dist_list[bracket]) / len(temp_rover_dist_list[bracket])
+            else:
+                state[bracket][2] = -1
+
+
+
+
 
         #state[-1,0], state[-1,1] = self_x, self_y
         state = mod.unsqueeze(state.flatten(), 1)
