@@ -9,6 +9,8 @@ from scipy.special import expit
 import fastrand, math
 from torch.optim import Adam
 from scipy.signal import lfilter
+import per.proportional as pr_proportional
+import per.rank_based as pr_rank
 
 from ReplayBuffer import ReplayBuffer
 
@@ -26,59 +28,54 @@ class DDPG(object):
         self.critic_optim = Adam(self.ac.parameters(), lr=args.critic_lr)
 
         # Create replay buffer
-        self.replay_buffer = ReplayBuffer(100000, random.randint(1,10000))
+        if self.args.replay_buffer_choice == 1: self.replay_buffer = ReplayBuffer(100000, random.randint(1,10000))
+        if self.args.replay_buffer_choice == 2: self.replay_buffer = pr_proportional.Experience(self.args.conf)
+        if self.args.replay_buffer_choice == 3: self.replay_buffer = pr_rank.Experience(self.args.conf)
 
         # Hyper-parameters
         self.batch_size = args.batch_size
         self.gamma = args.gamma
         self.criterion = nn.MSELoss() #nn.SmoothL1Loss()
 
-    def sample_memory(self, batch_size):
-        minibatch = random.sample(self.memory, batch_size)
-        minibatch = np.array(minibatch)
-        states, actions, rewards, next_states = minibatch[:,0:1], minibatch[:,1:2], minibatch[:,2:3], minibatch[:,3:]
-        return np.array(states), np.array(actions), np.array(rewards), np.array(next_states)
+    def sample_memory(self, episode):
+        if self.args.replay_buffer_choice == 1:
+            states, new_states, actions, rewards = self.replay_buffer.sample_batch(batch_size=self.args.batch_size)
+            states = torch.cat(states, 1); new_states = torch.cat(new_states, 1)
+            rewards = to_tensor(np.array(rewards)).unsqueeze(0)
+            data = None
 
-    def batch_bck_update_policy(self):
+        if self.args.replay_buffer_choice == 2 or self.args.replay_buffer_choice == 3:
+            data = self.replay_buffer.sample(episode, self.args.batch_size)
+            batch_data = np.array(data[0])
+            states = torch.cat(list(batch_data[:, 0]), 1)
+            new_states = torch.cat(list(batch_data[:, 1]), 1)
+            actions = list(batch_data[:, 2])
+            rewards = to_tensor(np.array(list(batch_data[:, 3]))).unsqueeze(0)
+
+        return states, new_states, actions, rewards, data
+
+
+
+
+
+
+
+    def update_actor(self, episode):
         # Sample batch
-        states, actions, rewards, next_states = self.replay_buffer.sample_batch(batch_size=5)#self.sample_memory(batch_size = 50)
+        states, new_states, actions, rewards, data = self.sample_memory(episode)
 
-        # Prepare for the target q batch
-        #next_states.volatile = True
-        next_actions = self.ac.actor_forward(next_states)
-        next_q_values = self.ac.critic_forward(next_states, next_actions)
-        next_q_values.volatile = False
-
-        target_qvals = rewards + self.discount * next_q_values
-
-        # Critic update
-        self.ac.zero_grad()
-        qvals = self.ac.critic_forward(states, actions)
-        value_loss = self.criterion(qvals, target_qvals)
-        value_loss.backward()
-        self.critic_optim.step()
-
-        # Actor update
-        self.ac.zero_grad()
-
-        policy_loss = -self.ac.critic_forward(states, self.ac.actor.forward(states))
-        policy_loss = policy_loss.mean()
-        policy_loss.backward()
-        self.actor_optim.step()
-
-    def update_actor(self):
-        # Sample batch
-        states, new_states, actions, rewards = self.replay_buffer.sample_batch(batch_size=self.args.batch_size)
         if len(states) == 0: return
-        states = torch.cat(states,1); new_states = torch.cat(new_states,1)
 
         vals = self.ac.critic_forward(states)
         new_vals = self.ac.critic_forward(new_states)
-        rewards = to_tensor(np.array(rewards))
         action_logs = self.ac.actor_forward(states)
 
         dt = rewards + self.gamma * new_vals - vals
         dt = to_tensor(to_numpy(dt))
+
+        #Update priorities
+        if self.args.replay_buffer_choice == 2: data[1][:] = np.reshape(np.abs(to_numpy(dt)), (len(dt[0])))[:]
+
 
         alogs = []
         for i, action in enumerate(actions):
@@ -95,11 +92,11 @@ class DDPG(object):
             self.ac.zero_grad()
 
 
-    def update_critic(self):
+    def update_critic(self, episode):
         # Sample batch
-        states, new_states, _, rewards = self.replay_buffer.sample_batch(batch_size=self.args.batch_size)
+        states, new_states, actions, rewards, data = self.sample_memory(episode)
+
         if len(states) == 0: return
-        states = torch.cat(states, 1); new_states = torch.cat(new_states,1); rewards = to_tensor(np.array(rewards)).unsqueeze(0)
 
 
         for epoch in range(self.args.critic_epoch):

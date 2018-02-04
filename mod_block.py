@@ -9,6 +9,7 @@ from scipy.special import expit
 import fastrand, math
 from torch.optim import Adam
 
+
 from ReplayBuffer import ReplayBuffer
 
 
@@ -25,7 +26,9 @@ class DDPG(object):
         self.critic_optim = Adam(self.ac.parameters(), lr=args.critic_lr)
 
         # Create replay buffer
-        self.replay_buffer = ReplayBuffer(1000000, 1234)
+        self.replay_buffer = ReplayBuffer(1000000, 1234)\
+        #self.replay_buffer = pr_replay.Experience()
+
 
         # Hyper-parameters
         self.batch_size = args.batch_size
@@ -40,36 +43,12 @@ class DDPG(object):
         states, actions, rewards, next_states = minibatch[:,0:1], minibatch[:,1:2], minibatch[:,2:3], minibatch[:,3:]
         return np.array(states), np.array(actions), np.array(rewards), np.array(next_states)
 
-    def batch_bck_update_policy(self):
-        # Sample batch
-        states, actions, rewards, next_states = self.replay_buffer.sample_batch(batch_size=5)#self.sample_memory(batch_size = 50)
-
-        # Prepare for the target q batch
-        #next_states.volatile = True
-        next_actions = self.ac.actor_forward(next_states)
-        next_q_values = self.ac.critic_forward(next_states, next_actions)
-        next_q_values.volatile = False
-
-        target_qvals = rewards + self.discount * next_q_values
-
-        # Critic update
-        self.ac.zero_grad()
-        qvals = self.ac.critic_forward(states, actions)
-        value_loss = self.criterion(qvals, target_qvals)
-        value_loss.backward()
-        self.critic_optim.step()
-
-        # Actor update
-        self.ac.zero_grad()
-
-        policy_loss = -self.ac.critic_forward(states, self.ac.actor.forward(states))
-        policy_loss = policy_loss.mean()
-        policy_loss.backward()
-        self.actor_optim.step()
-
-    def update_actor(self):
+    def update_actor(self, episode):
         # Sample batch
         states_batch, actions_batch, rewards_batch, next_states_batch = self.replay_buffer.sample_batch(batch_size=self.args.batch_size)
+
+
+
 
         for epoch in range(self.args.actor_epoch):
 
@@ -90,7 +69,7 @@ class DDPG(object):
             self.ac.zero_grad()
 
 
-    def update_critic(self):
+    def update_critic(self, episode):
         # Sample batch
         states_batch, actions_batch, rewards_batch, next_states_batch = self.replay_buffer.sample_batch(batch_size=self.args.batch_size)
 

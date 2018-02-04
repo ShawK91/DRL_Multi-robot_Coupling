@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from scipy.special import expit
 import fastrand, math
 from torch.optim import Adam
+import per.proportional as pbuffer
 
 
 def prob_choice(prob):
@@ -33,22 +34,30 @@ class Parameters:
 
         # Train data
         self.batch_size = 10000
-        self.num_episodes = 1000000
+        self.num_episodes = 200000
         self.actor_epoch = 1; self.actor_lr = 0.005
         self.critic_epoch = 1; self.critic_lr = 0.005
 
 
         #Rover domain
-        self.dim_x = self.dim_y = 10; self.obs_radius = 20; self.act_dist = 0.1; self.angle_res = 10
-        self.num_poi = 5; self.num_rover = 1; self.num_timestep = 15
+        self.dim_x = self.dim_y = 10; self.obs_radius = 15; self.act_dist = 0.1; self.angle_res = 15
+        self.num_poi = 1; self.num_rover = 1; self.num_timestep = 10
         self.poi_rand = 1
 
         #Dependents
-        self.state_dim = 4*360 / self.angle_res #+ 2
+        self.state_dim = 2*360 / self.angle_res #+ 2
         self.action_dim = 5
         self.epsilon = 0.5
         self.alpha = 0.9
         self.gamma = 0.9
+
+        #Replay Buffer
+        self.replay_buffer_choice = 1 #Normal Buffer (uniform sampling)
+                                      #Proportional sampling (priortizied)
+                                      #Rank based (proportional)
+
+        self.conf = {'batch_size': 32, 'bera_zero': 0.5, 'learn_start':1000, 'total_steps':self.num_episodes,
+                     'size': 1000, 'replace_old':True, 'alpha':0.7}
 
         self.save_foldername = 'R_Block/'
         if not os.path.exists(self.save_foldername): os.makedirs(self.save_foldername)
@@ -148,7 +157,7 @@ class Task_Rovers:
 
         self_x = self.rover_pos[rover_id][0]; self_y = self.rover_pos[rover_id][1]
 
-        state = np.zeros(((360 / self.params.angle_res), 4))  # FORMAT: [bracket] = (drone_avg_dist, drone_number, food_avg_dist, food_number_item, reward ......]
+        state = np.zeros(((360 / self.params.angle_res), 2))  # FORMAT: [bracket] = (drone_avg_dist, drone_number, food_avg_dist, food_number_item, reward ......]
         temp_poi_dist_list = [[] for _ in xrange(360 / self.params.angle_res)]
         temp_rover_dist_list = [[] for _ in xrange(360 / self.params.angle_res)]
 
@@ -180,18 +189,14 @@ class Task_Rovers:
         ####Encode the information onto the state
         for bracket in range(int(360 / self.params.angle_res)):
             # POIs
-            state[bracket][1] = len(temp_poi_dist_list[bracket])
-            if state[bracket][1] > 0:
-                state[bracket][0] = sum(temp_poi_dist_list[bracket]) / len(temp_poi_dist_list[bracket])
-            else:
-                state[bracket][0] = -1
+            num_poi = len(temp_poi_dist_list[bracket])
+            if num_poi > 0: state[bracket][0] = sum(temp_poi_dist_list[bracket]) / num_poi
+            else: state[bracket][0] = -1
 
             #Rovers
-            state[bracket][3] = len(temp_rover_dist_list[bracket])
-            if state[bracket][3] > 0:
-                state[bracket][2] = sum(temp_rover_dist_list[bracket]) / len(temp_rover_dist_list[bracket])
-            else:
-                state[bracket][2] = -1
+            num_rover = len(temp_rover_dist_list[bracket])
+            if num_rover > 0: state[bracket][1] = sum(temp_rover_dist_list[bracket]) / num_rover
+            else: state[bracket][1] = -1
 
 
 
@@ -218,10 +223,10 @@ class Task_Rovers:
         reward = 0.0
 
         if action == 0: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]]
-        if action == 1: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] + 1]
-        if action == 2: new_pos = [self.rover_pos[rover_id][0] - 1, self.rover_pos[rover_id][1]]
-        if action == 3: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] - 1]
-        if action == 4: new_pos = [self.rover_pos[rover_id][0] + 1, self.rover_pos[rover_id][1]]
+        elif action == 1: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] + 1]
+        elif action == 2: new_pos = [self.rover_pos[rover_id][0] - 1, self.rover_pos[rover_id][1]]
+        elif action == 3: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] - 1]
+        elif action == 4: new_pos = [self.rover_pos[rover_id][0] + 1, self.rover_pos[rover_id][1]]
 
         #Check if action is legal
         if not(new_pos[0] >= self.dim_x or new_pos[0] < 0 or new_pos[1] >= self.dim_y or new_pos[1] < 0):  #If legal
@@ -302,22 +307,23 @@ def test_env(env, agent, parameters):
     episode_reward = 0.0
     for timestep in range(parameters.num_timestep):  # Each timestep
 
-        # Get current state from environment
-        state = env.get_state(0)
-        state = mod.to_tensor(state)
+        for rover_id in range(parameters.num_rover):
+            # Get current state from environment
+            state = env.get_state(rover_id)
+            state = mod.to_tensor(state)
 
-        # Get action
-        action_prob = agent.ac.actor_forward(state)
-        action_prob = mod.to_numpy(action_prob).flatten()
-        action = np.argmax(action_prob)
+            # Get action
+            action_prob = agent.ac.actor_forward(state)
+            action_prob = mod.to_numpy(action_prob).flatten()
+            action = np.argmax(action_prob)
 
-        # Run enviornment one step up and get reward
-        reward = env.step(0, action)
-        episode_reward += reward
+            # Run enviornment one step up and get reward
+            reward = env.step(rover_id, action)
+            episode_reward += reward
 
-        #Visualize
-        print action_prob, action
-        env.visualize()
+
+            #print action_prob, action
+        env.visualize() #Visualize
 
     return episode_reward
 
@@ -357,6 +363,9 @@ def actor_check(env, actor, params):
         print row
     print
 
+def add_experience(args, state, new_state, action, reward, agent):
+    if args.replay_buffer_choice == 1: agent.replay_buffer.add(state, new_state, action, reward)
+    if args.replay_buffer_choice == 2 or args.replay_buffer_choice == 3: agent.replay_buffer.store([state, new_state, action, reward])
 
 
 if __name__ == "__main__":
@@ -375,32 +384,33 @@ if __name__ == "__main__":
         env.reset() #Reset environment
         for timestep in range(parameters.num_timestep): #Each timestep
 
-            #Get current state from environment
-            state = env.get_state(0)
-            state = mod.to_tensor(state)
+            for rover_id in range(parameters.num_rover):
+                #Get current state from environment
+                state = env.get_state(rover_id)
+                state = mod.to_tensor(state)
 
-            #Get action
-            action_prob = agent.ac.actor_forward(state)
-            action_prob = mod.to_numpy(action_prob).flatten()
+                #Get action
+                action_prob = agent.ac.actor_forward(state)
+                action_prob = mod.to_numpy(action_prob).flatten()
 
-            #Epsilon greedy exploration
-            if random.random() < parameters.epsilon and episode % 10 != 0: #Explore
-                #action = prob_choice(action_prob)
-                action = randint(0,4)
-                #action = oracle[timestep]
-            else:
-                action = soft_argmax(action_prob)
-            #print action_prob
+                #Epsilon greedy exploration
+                if random.random() < parameters.epsilon and episode % 10 != 0: #Explore
+                    #action = prob_choice(action_prob)
+                    action = randint(0,4)
+                    #action = oracle[timestep]
+                else:
+                    action = soft_argmax(action_prob)
+                #print action_prob
 
-            #Run enviornment one step up and get reward
-            reward = env.step(0, action)
-            episode_reward += reward
+                #Run enviornment one step up and get reward
+                reward = env.step(rover_id, action)
+                episode_reward += reward
 
-            #Get new state
-            new_state = mod.to_tensor(env.get_state(0))
+                #Get new state
+                new_state = mod.to_tensor(env.get_state(0))
 
-            #Add to memory
-            agent.replay_buffer.add(state, new_state, action, reward)
+                #Add to memory
+                add_experience(parameters, state, new_state, action, reward, agent)
 
         if episode_reward > 0: explore_success += 1
 
@@ -408,17 +418,16 @@ if __name__ == "__main__":
         #print episode, episode_reward
         if episode % 20 == 0:
             tracker.update([episode_reward], episode)
-            agent.update_critic()
+            agent.update_critic(episode)
             if episode % 20 == 0:
-                agent.update_actor()
+                agent.update_actor(episode)
                 #parameters.epsilon *= 0.99 #Anneal epsilon
-            print 'Gen', episode, 'Reward', episode_reward, 'Aggregrate', "%0.2f" % tracker.all_tracker[0][1], 'Exp_Success:', "%0.2f" % (explore_success/episode), 'Epsilon', "%0.2f" %parameters.epsilon, 'Mem_size', agent.replay_buffer.size()
+            print 'Gen', episode, 'Reward', episode_reward, 'Aggregrate', "%0.2f" % tracker.all_tracker[0][1], 'Exp_Success:', "%0.2f" % (explore_success/episode), 'Epsilon', "%0.2f" %parameters.epsilon#, 'Mem_size', agent.replay_buffer.size()
 
 
         if episode % 200 == 0: test_env(env, agent, parameters)
         #if episode % 50 == 0: v_check(env, agent.ac, parameters)
         #if episode % 50 == 0: actor_check(env, agent.ac, parameters)
-
 
 
 
