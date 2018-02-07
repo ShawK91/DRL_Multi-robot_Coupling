@@ -40,7 +40,7 @@ class Parameters:
 
 
         #Rover domain
-        self.dim_x = self.dim_y = 10; self.obs_radius = 15; self.act_dist = 0.1; self.angle_res = 1
+        self.dim_x = self.dim_y = 10; self.obs_radius = 15; self.act_dist = 0.1; self.angle_res = 10
         self.num_poi = 5; self.num_rover = 1; self.num_timestep = 20
         self.poi_rand = 1
 
@@ -388,7 +388,7 @@ if __name__ == "__main__":
                 #Get current state from environment
                 state = env.get_state(rover_id)
                 state = mod.to_tensor(state)
-                state = state.unsqueeze(0).unsqueeze(0)
+                state = state.t().unsqueeze(0)
 
                 #Get action
                 action_prob = agent.ac.actor_forward(state)
@@ -409,7 +409,7 @@ if __name__ == "__main__":
 
                 #Get new state
                 new_state = mod.to_tensor(env.get_state(rover_id))
-                new_state = new_state.unsqueeze(0).unsqueeze(0)
+                new_state = new_state.t().unsqueeze(0)
 
                 #Add to memory
                 add_experience(parameters, state, new_state, action, reward, agent)

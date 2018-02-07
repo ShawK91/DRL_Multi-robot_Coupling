@@ -172,22 +172,22 @@ class Actor_Critic(nn.Module):
         self.args = args
 
         #Shared layers
-        self.actor_conv1 = nn.Conv2d(1, 10, kernel_size=2)
-        self.actor_conv2 = nn.Conv2d(1, 10, kernel_size=2)
-        self.critic_conv1 = nn.Conv2d(1, 10, kernel_size=2)
-        self.critic_conv2 = nn.Conv2d(1, 10, kernel_size=2)
+        self.actor_conv1 = nn.Conv1d(2, 10, kernel_size=2)
+        self.actor_conv2 = nn.Conv1d(2, 10, kernel_size=2)
+        self.critic_conv1 = nn.Conv1d(2, 10, kernel_size=2)
+        self.critic_conv2 = nn.Conv1d(2, 10, kernel_size=2)
 
-        self.fc1 = Parameter(torch.rand(args.num_hnodes, 3590), requires_grad=1)
-        self.fc2 = Parameter(torch.rand(args.num_hnodes, 3590), requires_grad=1)
+        #self.fc1 = Parameter(torch.rand(args.num_hnodes, 3590), requires_grad=1)
+        #self.fc2 = Parameter(torch.rand(args.num_hnodes, 3590), requires_grad=1)
 
         #self.mmu = GD_MMU(args.num_hnodes, args.num_hnodes, args.num_mem, args.num_hnodes)
 
         #Actor
-        self.w_actor1 = Parameter(torch.rand(num_actions, args.num_hnodes), requires_grad=1)
+        self.w_actor1 = Parameter(torch.rand(num_actions, 5*17), requires_grad=1)
         #self.w_actor2 = Parameter(torch.rand(num_actions, args.num_hnodes), requires_grad=1)
 
         #Critic
-        self.w_critic1 = Parameter(torch.rand(1, args.num_hnodes), requires_grad=1)
+        self.w_critic1 = Parameter(torch.rand(1, 5*17), requires_grad=1)
         #self.w_critic2 = Parameter(torch.rand(1, args.num_hnodes + num_actions), requires_grad=1)
 
         for param in self.parameters():
@@ -200,9 +200,9 @@ class Actor_Critic(nn.Module):
 
     def actor_forward(self, state):
         x = self.actor_conv1(state)
-        #x = F.relu(F.max_pool2d(x, 2))
+        x = F.relu(F.max_pool2d(x, 2))
         #x = F.relu(F.max_pool2d(self.acconv2_drop(self.conv2(x)), 2))
-
+        x = x.view( -1, len(x))
         out = self.w_actor1.mm(x)
         out = F.sigmoid(out)
         out = F.log_softmax(out, dim=0)
@@ -210,11 +210,9 @@ class Actor_Critic(nn.Module):
 
     def critic_forward(self, state):
         x = self.critic_conv1(state)
-        #x = F.relu(F.max_pool2d(x, 2))
+        x = F.relu(F.max_pool2d(x, 2))
         #x = F.relu(F.max_pool2d(self.acconv2_drop(self.conv2(x)), 2))
-        x = x.view(3590, -1)
-        x = F.relu(self.fc2.mm(x))
-        x = F.dropout(x, training=self.training)
+        x = x.view( -1, len(x))
 
 
         out = self.w_critic1.mm(x)
@@ -376,149 +374,6 @@ class GD_MMU(nn.Module):
 
 
 
-
-
-#Extra
-class Actor(nn.Module):
-    def __init__(self, nb_states, nb_actions, num_hid = 50, num_mem=50, init_w=3e-3):
-        super(Actor, self).__init__()
-
-        self.fc1 = Parameter(torch.rand(num_hid, nb_states), requires_grad=1)
-        self.mmu = GD_MMU(num_hid, num_hid, num_mem, num_hid)
-        self.fc2 = Parameter(torch.rand(nb_actions, num_hid), requires_grad=1)
-        for param in self.parameters():
-            # torch.nn.init.xavier_normal(param)
-            # torch.nn.init.orthogonal(param)
-            # torch.nn.init.sparse(param, sparsity=0.5)
-            torch.nn.init.kaiming_normal(param)
-
-    def forward(self, state, action):
-        out = self.fc1.mm(state)
-        out = self.mmu.forward(out)
-        out = self.fc2.mm(out)
-        return out
-
-    def reset(self, batch_size=1):
-        self.mmu.reset(batch_size)
-
-class Critic(nn.Module):
-    def __init__(self, nb_states, nb_actions, num_hid = 50, num_mem=50):
-        super(Critic, self).__init__()
-
-        self.fc1 = Parameter(torch.rand(num_hid, nb_states), requires_grad=1)
-        self.mmu = GD_MMU(num_hid+nb_actions, num_hid, num_mem, num_hid)
-        self.fc2 = Parameter(torch.rand(1, num_hid), requires_grad=1)
-        for param in self.parameters():
-            # torch.nn.init.xavier_normal(param)
-            # torch.nn.init.orthogonal(param)
-            # torch.nn.init.sparse(param, sparsity=0.5)
-            torch.nn.init.kaiming_normal(param)
-
-    def forward(self, state, action):
-        out = self.fc1.mm(state)
-        out = torch.cat([out,action],1)
-        out = self.mmu.forward(out)
-        out = self.fc2.mm(out)
-        return out
-
-    def reset(self, batch_size=1):
-        self.mmu.reset(batch_size)
-
-class bckGD_MMU(nn.Module):
-    def __init__(self, input_size, hidden_size, memory_size, output_size):
-        super(GD_MMU, self).__init__()
-
-        self.input_size = input_size;
-        self.hidden_size = hidden_size;
-        self.memory_size = memory_size;
-        self.output_size = output_size
-
-        # Input gate
-        self.w_inpgate = Parameter(torch.rand(hidden_size, input_size+1), requires_grad=1)
-        self.w_rec_inpgate = Parameter(torch.rand( hidden_size, output_size+1), requires_grad=1)
-        self.w_mem_inpgate = Parameter(torch.rand(hidden_size, memory_size), requires_grad=1)
-
-        # Block Input
-        self.w_inp = Parameter(torch.rand(hidden_size, input_size + 1), requires_grad=1)
-        self.w_rec_inp = Parameter(torch.rand(hidden_size, output_size+1), requires_grad=1)
-
-        # Read Gate
-        self.w_readgate = Parameter(torch.rand(memory_size, input_size + 1), requires_grad=1)
-        self.w_rec_readgate = Parameter(torch.rand(memory_size, output_size+1), requires_grad=1)
-        self.w_mem_readgate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
-
-        # Memory Decoder
-        self.w_decoder = Parameter(torch.rand(hidden_size, memory_size), requires_grad=1)
-
-        # Write Gate
-        self.w_writegate = Parameter(torch.rand(memory_size, input_size + 1), requires_grad=1)
-        self.w_rec_writegate = Parameter(torch.rand(memory_size, output_size+1), requires_grad=1)
-        self.w_mem_writegate = Parameter(torch.rand(memory_size, memory_size), requires_grad=1)
-
-        # Memory Encoder
-        self.w_encoder = Parameter(torch.rand(memory_size, hidden_size), requires_grad=1)
-
-        # Memory init
-        self.w_mem_init = Parameter(torch.rand(memory_size, 1), requires_grad=1)
-
-        # Adaptive components
-        self.mem = (self.w_mem_init.mm(Variable(torch.zeros(1, 1), requires_grad=1))).cuda()
-        self.out = Variable(torch.zeros(self.output_size, 1), requires_grad=1).cuda()
-
-        for param in self.parameters():
-            # torch.nn.init.xavier_normal(param)
-            # torch.nn.init.orthogonal(param)
-            # torch.nn.init.sparse(param, sparsity=0.5)
-            torch.nn.init.kaiming_normal(param)
-
-    def reset(self, batch_size):
-        # Adaptive components
-        self.mem = self.w_mem_init.mm(Variable(torch.zeros(1, batch_size), requires_grad=1).cuda())
-        self.out = Variable(torch.zeros(self.output_size, batch_size), requires_grad=1).cuda()
-
-    def prep_bias(self, mat, batch_size):
-        return Variable(torch.cat((mat.cpu().data, torch.ones(self.ou, batch_size))).cuda())
-
-    def graph_compute(self, input, rec_output, memory, batch_size):
-
-        # Reshape add 1 for bias
-        input = self.prep_bias(input, batch_size)
-        rec_output = self.prep_bias(rec_output, batch_size)
-
-        # Input process
-        block_inp = F.sigmoid(self.w_inp.mm(input) + self.w_rec_inp.mm(rec_output))  # Block Input
-        inp_gate = F.sigmoid(self.w_inpgate.mm(input) + self.w_mem_inpgate.mm(memory) ) #Input gate + self.w_rec_inpgate.mm(rec_output)
-
-
-        # Read from memory
-        read_gate_out = F.sigmoid(self.w_readgate.mm(input) + self.w_mem_readgate.mm(memory) + self.w_rec_readgate.mm(rec_output))
-        decoded_mem = self.w_decoder.mm(read_gate_out * memory)
-
-        # Compute hidden activation
-        hidden_act = decoded_mem + block_inp  * inp_gate
-
-        # Update memory
-        write_gate_out = F.sigmoid(self.w_writegate.mm(input) + self.w_mem_writegate.mm(memory) + self.w_rec_writegate.mm(rec_output))  # #Write gate
-        encoded_update = F.tanh(self.w_encoder.mm(hidden_act))
-        memory = (1 - write_gate_out) * memory + write_gate_out * encoded_update
-
-
-        return hidden_act, memory
-
-    def forward(self, input):
-        batch_size = input.data.shape[-1]
-        self.out, self.mem = self.graph_compute(input, self.out, self.mem, batch_size)
-        return self.out
-
-    def turn_grad_on(self):
-        for param in self.parameters():
-            param.requires_grad = True
-            param.volatile = False
-
-    def turn_grad_off(self):
-        for param in self.parameters():
-            param.requires_grad = False
-            param.volatile = True
 
 
 
