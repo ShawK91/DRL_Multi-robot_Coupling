@@ -30,7 +30,7 @@ class Parameters:
     def __init__(self):
 
         #NN specifics
-        self.num_hnodes = self.num_mem = 100
+        self.num_hnodes = self.num_mem = 200
 
         # Train data
         self.batch_size = 10000
@@ -38,11 +38,15 @@ class Parameters:
         self.actor_epoch = 1; self.actor_lr = 0.005
         self.critic_epoch = 1; self.critic_lr = 0.005
 
-
         #Rover domain
-        self.dim_x = self.dim_y = 10; self.obs_radius = 15; self.act_dist = 0.1; self.angle_res = 1
-        self.num_poi = 5; self.num_rover = 1; self.num_timestep = 20
+        self.dim_x = self.dim_y = 10; self.obs_radius = 15; self.act_dist = 1.1; self.angle_res = 15
+        self.num_poi = 5; self.num_rover = 4; self.num_timestep = 20
         self.poi_rand = 1
+        self.coupling = 2
+        self.sensor_model = 1 #1: Density Sensor
+                              #2: Closest Sensor
+
+
 
         #Dependents
         self.state_dim = 2*360 / self.angle_res #+ 2
@@ -57,8 +61,8 @@ class Parameters:
                                       #2: Proportional sampling (priortizied)
                                       #3: Rank based (prioritized)
                                       #4: Open AI Proportional Experience Replay #TODO
-        self.conf = {'batch_size': 32, 'bera_zero': 0.5, 'learn_start':1000, 'total_steps':self.num_episodes,
-                     'size': 1000, 'replace_old':True, 'alpha':0.7}
+        self.conf = {'batch_size': 1000, 'bera_zero': 0.5, 'learn_start':1000, 'total_steps':self.num_episodes,
+                     'size': self.buffer_size, 'replace_old':True, 'alpha':0.7}
 
         self.save_foldername = 'R_Block/'
         if not os.path.exists(self.save_foldername): os.makedirs(self.save_foldername)
@@ -191,20 +195,22 @@ class Task_Rovers:
         for bracket in range(int(360 / self.params.angle_res)):
             # POIs
             num_poi = len(temp_poi_dist_list[bracket])
-            if num_poi > 0: state[bracket][0] = sum(temp_poi_dist_list[bracket]) / num_poi
+            if num_poi > 0:
+                if parameters.sensor_model == 1: state[bracket][0] = sum(temp_poi_dist_list[bracket]) / num_poi #Density Sensor
+                else: state[bracket][0] = min(temp_poi_dist_list[bracket])  #Minimum Sensor
             else: state[bracket][0] = -1
 
             #Rovers
             num_rover = len(temp_rover_dist_list[bracket])
-            if num_rover > 0: state[bracket][1] = sum(temp_rover_dist_list[bracket]) / num_rover
+            if num_rover > 0:
+                if parameters.sensor_model == 1: state[bracket][1] = sum(temp_rover_dist_list[bracket]) / num_rover #Density Sensor
+                else: state[bracket][1] = min(temp_rover_dist_list[bracket]) #Minimum Sensor
             else: state[bracket][1] = -1
 
 
 
-
-
         #state[-2,0], state[-1,0] = self_x, self_y
-        #state = mod.unsqueeze(state.flatten(), 1)
+        state = mod.unsqueeze(state.flatten(), 1)
 
         return state
 
@@ -218,37 +224,41 @@ class Task_Rovers:
         dist = math.sqrt(dist)
         return angle, dist
 
-    def step(self, rover_id, action):
+    def step(self, joint_action):
 
-        reward = 0.0
+        for rover_id in range(parameters.num_rover):
+            action = joint_action[rover_id]
+            if action == 0: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]]
+            elif action == 1: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] + 1]
+            elif action == 2: new_pos = [self.rover_pos[rover_id][0] - 1, self.rover_pos[rover_id][1]]
+            elif action == 3: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] - 1]
+            elif action == 4: new_pos = [self.rover_pos[rover_id][0] + 1, self.rover_pos[rover_id][1]]
 
-        if action == 0: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]]
-        elif action == 1: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] + 1]
-        elif action == 2: new_pos = [self.rover_pos[rover_id][0] - 1, self.rover_pos[rover_id][1]]
-        elif action == 3: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] - 1]
-        elif action == 4: new_pos = [self.rover_pos[rover_id][0] + 1, self.rover_pos[rover_id][1]]
+            #Check if action is legal
+            if not(new_pos[0] >= self.dim_x or new_pos[0] < 0 or new_pos[1] >= self.dim_y or new_pos[1] < 0):  #If legal
+                self.rover_pos[rover_id] = [new_pos[0], new_pos[1]] #Execute action
 
-        #Check if action is legal
-        if not(new_pos[0] >= self.dim_x or new_pos[0] < 0 or new_pos[1] >= self.dim_y or new_pos[1] < 0):  #If legal
-            self.rover_pos[rover_id] = [new_pos[0], new_pos[1]] #Execute action
-        #else: reward -= 0.1 #Wall penalty
-
-        #Check for reward
-        reward = 0.0
-        for i, loc in enumerate(self.poi_pos):
+    def get_reward(self):
+        #Update POI's visibility
+        poi_visitors = [[] for _ in range(self.params.num_poi)]
+        for i, loc in enumerate(self.poi_pos): #For all POIs
             if self.poi_status[i]== True: continue #Ignore POIs that have been harvested already
 
-            x1 = loc[0] - self.rover_pos[rover_id][0]; y1 = loc[1] - self.rover_pos[rover_id][1]
-            dist = math.sqrt(x1 * x1 + y1 * y1)
-            if dist <= self.params.act_dist:
-                self.poi_status[i] = True
-                reward += 1.0
-            #reward -= dist/(2.0 * self.dim_x )
+            for rover_id in range(self.params.num_rover): #For each rover
+                x1 = loc[0] - self.rover_pos[rover_id][0]; y1 = loc[1] - self.rover_pos[rover_id][1]
+                dist = math.sqrt(x1 * x1 + y1 * y1)
+                if dist <= self.params.act_dist: poi_visitors[i].append(rover_id) #Add rover to POI's visitor list
 
-        #Try
+        #Compute reward
+        rewards = [0.0 for _ in range(self.params.num_rover)]
+        for poi_id, rovers in enumerate(poi_visitors):
+            if len(rovers) >= self.params.coupling:
+                self.poi_status[poi_id] = True
+                lucky_rovers = random.sample(rovers, self.params.coupling)
+                for rover_id in lucky_rovers: rewards[rover_id] += 1.0/self.params.num_poi
 
+        return rewards
 
-        return reward/(1.0 * self.params.num_poi)
 
     def visualize(self):
 
@@ -307,22 +317,21 @@ def test_env(env, agent, parameters):
     episode_reward = 0.0
     for timestep in range(parameters.num_timestep):  # Each timestep
 
-        for rover_id in range(parameters.num_rover):
-            # Get current state from environment
-            state = env.get_state(rover_id)
-            state = mod.to_tensor(state)
+        # Get current state from environment
+        joint_state = []
+        for rover_id in range(parameters.num_rover): joint_state.append(mod.to_tensor(env.get_state(rover_id)))
+        joint_state_T = torch.cat(joint_state, 1)
 
-            # Get action
-            action_prob = agent.ac.actor_forward(state)
-            action_prob = mod.to_numpy(action_prob).flatten()
-            action = np.argmax(action_prob)
+        # Get action
+        joint_action_prob = mod.to_numpy(agent.ac.actor_forward(joint_state_T))  # [probs, batch]
+        actions = np.argmax(joint_action_prob, axis=0)  # Grredy max value action selection
+        # greedy_actions = np.random.choice(np.flatnonzero(prob == prob.max())) #TODO Break Argmax bias towards index clashes (use random choice between same values)
 
-            # Run enviornment one step up and get reward
-            reward = env.step(rover_id, action)
-            episode_reward += reward
+        # Run enviornment one step up and get reward
+        env.step(actions)
+        joint_rewards = env.get_reward()
+        episode_reward += sum(joint_rewards)
 
-
-            #print action_prob, action
         env.visualize() #Visualize
 
     return episode_reward
@@ -375,46 +384,43 @@ if __name__ == "__main__":
     actor_noise = mod.OrnsteinUhlenbeckActionNoise(mu=np.zeros(parameters.action_dim))
     tracker = Tracker(parameters, ['rewards'], '')
 
-    explore_success = 0.0; oracle = [3,3,3,3,2,2,2,0,0,0]
-    oracle = [2,2,2,2,2,2,2,2,2,2]
 
     for episode in range(1, parameters.num_episodes): #Each episode
-        episode_reward = 0.0
+        episode_reward = 0.0;
 
         env.reset() #Reset environment
         for timestep in range(parameters.num_timestep): #Each timestep
 
-            for rover_id in range(parameters.num_rover):
-                #Get current state from environment
-                state = env.get_state(rover_id)
-                state = mod.to_tensor(state)
-                state = state.unsqueeze(0).unsqueeze(0)
+            # Get current state from environment
+            joint_state = []
+            for rover_id in range(parameters.num_rover): joint_state.append(mod.to_tensor(env.get_state(rover_id)))
+            joint_state_T = torch.cat(joint_state, 1)
 
-                #Get action
-                action_prob = agent.ac.actor_forward(state)
-                action_prob = mod.to_numpy(action_prob).flatten()
+            # Get action
+            joint_action_prob = mod.to_numpy(agent.ac.actor_forward(joint_state_T)) #[probs, batch]
+            greedy_actions = np.argmax(joint_action_prob, axis=0) #Grredy max value action selection
+            #greedy_actions = np.random.choice(np.flatnonzero(prob == prob.max())) #TODO Break Argmax bias towards index clashes (use random choice between same values)
 
-                #Epsilon greedy exploration
-                if random.random() < parameters.epsilon and episode % 10 != 0: #Explore
-                    #action = prob_choice(action_prob)
-                    action = randint(0,4)
-                    #action = oracle[timestep]
-                else:
-                    action = soft_argmax(action_prob)
-                #print action_prob
+            #Epsilon greedy exploration through action choice perturbation
+            rand = np.random.uniform(0,1,parameters.num_rover)
+            is_perturb = rand < parameters.epsilon
+            if timestep % 20 == 0: is_perturb = np.zeros(parameters.num_rover).astype(bool) #Greedy for these test episodes
+            actions = np.multiply(greedy_actions, (np.invert(is_perturb))) + np.multiply(np.random.randint(0,4, parameters.num_rover), (is_perturb))
 
-                #Run enviornment one step up and get reward
-                reward = env.step(rover_id, action)
-                episode_reward += reward
+            # Run enviornment one step up and get reward
+            env.step(actions)
+            joint_rewards = env.get_reward()
+            episode_reward += sum(joint_rewards)/parameters.coupling
 
-                #Get new state
-                new_state = mod.to_tensor(env.get_state(rover_id))
-                new_state = new_state.unsqueeze(0).unsqueeze(0)
+            #Get new state
+            joint_next_state = []
+            for rover_id in range(parameters.num_rover): joint_next_state.append(mod.to_tensor(env.get_state(rover_id)))
 
-                #Add to memory
+            #Add to memory
+            for state, new_state, action, reward in zip(joint_state, joint_next_state, actions, joint_rewards):
                 add_experience(parameters, state, new_state, action, reward, agent)
 
-        if episode_reward > 0: explore_success += 1
+        #if episode_reward > 0: explore_success += 1
 
         #Gradient update periodically
         #print episode, episode_reward
@@ -424,10 +430,10 @@ if __name__ == "__main__":
             if episode % 20 == 0:
                 agent.update_actor(episode)
                 #parameters.epsilon *= 0.99 #Anneal epsilon
-            print 'Gen', episode, 'Reward', episode_reward, 'Aggregrate', "%0.2f" % tracker.all_tracker[0][1], 'Exp_Success:', "%0.2f" % (explore_success/episode), 'Epsilon', "%0.2f" %parameters.epsilon#, 'Mem_size', agent.replay_buffer.size()
+            print 'Gen', episode, 'Reward', episode_reward, 'Aggregrate', "%0.2f" % tracker.all_tracker[0][1], 'Epsilon', "%0.2f" %parameters.epsilon#, 'Mem_size', agent.replay_buffer.size() 'Exp_Success:', "%0.2f" % (explore_success/episode),
 
 
-        #if episode % 200 == 0: test_env(env, agent, parameters)
+        if episode % 200 == 0: test_env(env, agent, parameters)
         #if episode % 50 == 0: v_check(env, agent.ac, parameters)
         #if episode % 50 == 0: actor_check(env, agent.ac, parameters)
 

@@ -40,7 +40,7 @@ class A2C_Discrete(object):
     def sample_memory(self, episode):
         if self.args.replay_buffer_choice == 1:
             states, new_states, actions, rewards = self.replay_buffer.sample_batch(batch_size=self.args.batch_size)
-            states = torch.cat(states, 0); new_states = torch.cat(new_states, 0)
+            states = torch.cat(states, 1); new_states = torch.cat(new_states, 1)
             rewards = to_tensor(np.array(rewards)).unsqueeze(0)
             data = None
 
@@ -53,12 +53,6 @@ class A2C_Discrete(object):
             rewards = to_tensor(np.array(list(batch_data[:, 3]))).unsqueeze(0)
 
         return states, new_states, actions, rewards, data
-
-
-
-
-
-
 
     def update_actor(self, episode):
         # Sample batch
@@ -91,7 +85,6 @@ class A2C_Discrete(object):
             self.actor_optim.step()
             self.ac.zero_grad()
 
-
     def update_critic(self, episode):
         # Sample batch
         states, new_states, actions, rewards, data = self.sample_memory(episode)
@@ -112,18 +105,6 @@ class A2C_Discrete(object):
             self.critic_optim.step()
             self.ac.zero_grad()
             new_states.volatile = False
-
-
-
-
-
-
-
-
-    def random_action(self):
-        action = np.random.uniform(-1., 1., self.nb_actions)
-        self.a_t = action
-        return action
 
     def select_action(self, s_t, decay_epsilon=True):
         action = to_numpy(self.actor(to_tensor(np.array([s_t])))).squeeze(0)
@@ -171,24 +152,13 @@ class Actor_Critic(nn.Module):
         super(Actor_Critic, self).__init__()
         self.args = args
 
-        #Shared layers
-        self.actor_conv1 = nn.Conv2d(1, 10, kernel_size=2)
-        self.actor_conv2 = nn.Conv2d(1, 10, kernel_size=2)
-        self.critic_conv1 = nn.Conv2d(1, 10, kernel_size=2)
-        self.critic_conv2 = nn.Conv2d(1, 10, kernel_size=2)
-
-        self.fc1 = Parameter(torch.rand(args.num_hnodes, 3590), requires_grad=1)
-        self.fc2 = Parameter(torch.rand(args.num_hnodes, 3590), requires_grad=1)
-
-        #self.mmu = GD_MMU(args.num_hnodes, args.num_hnodes, args.num_mem, args.num_hnodes)
-
         #Actor
-        self.w_actor1 = Parameter(torch.rand(num_actions, args.num_hnodes), requires_grad=1)
-        #self.w_actor2 = Parameter(torch.rand(num_actions, args.num_hnodes), requires_grad=1)
+        self.w_actor1 = Parameter(torch.rand(args.num_hnodes, num_input), requires_grad=1)
+        self.w_actor2 = Parameter(torch.rand(num_actions, args.num_hnodes), requires_grad=1)
 
         #Critic
-        self.w_critic1 = Parameter(torch.rand(1, args.num_hnodes), requires_grad=1)
-        #self.w_critic2 = Parameter(torch.rand(1, args.num_hnodes + num_actions), requires_grad=1)
+        self.w_critic1 = Parameter(torch.rand(args.num_hnodes, num_input), requires_grad=1)
+        self.w_critic2 = Parameter(torch.rand(1, args.num_hnodes), requires_grad=1)
 
         for param in self.parameters():
             #torch.nn.init.xavier_normal(param)
@@ -199,26 +169,14 @@ class Actor_Critic(nn.Module):
         self.cuda()
 
     def actor_forward(self, state):
-        x = self.actor_conv1(state)
-        #x = F.relu(F.max_pool2d(x, 2))
-        #x = F.relu(F.max_pool2d(self.acconv2_drop(self.conv2(x)), 2))
-
-        out = self.w_actor1.mm(x)
-        out = F.sigmoid(out)
+        out = F.tanh(self.w_actor1.mm(state))
+        out = F.sigmoid(self.w_actor2.mm(out))
         out = F.log_softmax(out, dim=0)
         return out
 
     def critic_forward(self, state):
-        x = self.critic_conv1(state)
-        #x = F.relu(F.max_pool2d(x, 2))
-        #x = F.relu(F.max_pool2d(self.acconv2_drop(self.conv2(x)), 2))
-        x = x.view(3590, -1)
-        x = F.relu(self.fc2.mm(x))
-        x = F.dropout(x, training=self.training)
-
-
-        out = self.w_critic1.mm(x)
-        out = F.sigmoid(out)
+        out = F.tanh(self.w_critic1.mm(state))
+        out = F.sigmoid(self.w_critic2.mm(out))
         return out
 
     def reset(self, batch_size=1):
