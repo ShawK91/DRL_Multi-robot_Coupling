@@ -39,13 +39,11 @@ class Parameters:
 
         #Rover domain
         self.dim_x = self.dim_y = 10; self.obs_radius = 15; self.act_dist = 1.1; self.angle_res = 15
-        self.num_poi = 5; self.num_rover = 4; self.num_timestep = 20
+        self.num_poi = 2; self.num_rover = 4; self.num_timestep = 20
         self.poi_rand = 1
         self.coupling = 2
-        self.sensor_model = 1 #1: Density Sensor
+        self.sensor_model = 2 #1: Density Sensor
                               #2: Closest Sensor
-
-
 
         #Dependents
         self.state_dim = 2*360 / self.angle_res #+ 2
@@ -258,7 +256,6 @@ class Task_Rovers:
 
         return rewards
 
-
     def visualize(self):
 
         grid = [['-' for _ in range(self.dim_x)] for _ in range(self.dim_y)]
@@ -403,7 +400,7 @@ if __name__ == "__main__":
             #Epsilon greedy exploration through action choice perturbation
             rand = np.random.uniform(0,1,parameters.num_rover)
             is_perturb = rand < parameters.epsilon
-            if timestep % 20 == 0: is_perturb = np.zeros(parameters.num_rover).astype(bool) #Greedy for these test episodes
+            if episode % 20 == 0: is_perturb = np.zeros(parameters.num_rover).astype(bool) #Greedy for these test episodes
             actions = np.multiply(greedy_actions, (np.invert(is_perturb))) + np.multiply(np.random.randint(0,4, parameters.num_rover), (is_perturb))
 
             # Run enviornment one step up and get reward
