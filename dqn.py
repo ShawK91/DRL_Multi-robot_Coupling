@@ -14,7 +14,6 @@ import fastrand, math
 from torch.optim import Adam
 
 
-
 def prob_choice(prob):
     prob = prob/np.sum(prob)
     rand = random.random()
@@ -30,7 +29,7 @@ class Parameters:
     def __init__(self):
 
         #NN specifics
-        self.num_hnodes = self.num_mem = 200
+        self.num_hnodes = self.num_mem = 100
 
         # Train data
         self.batch_size = 10000
