@@ -21,6 +21,7 @@ class A2C_Discrete(object):
 
         # Create Actor and Critic Network
         self.ac = Actor_Critic(args.state_dim, args.action_dim, args)
+        self.ledger = Ledger(max_entries=10000, decay_rate=0.9)
 
         #Optimizers
         self.actor_optim = Adam(self.ac.parameters(), lr=args.actor_lr)
@@ -80,7 +81,7 @@ class A2C_Discrete(object):
         for epoch in range(self.args.actor_epoch):
             policy_loss =  -(dt * alogs)
             policy_loss = policy_loss.mean()
-            policy_loss.backward()
+            policy_loss.backward(retain_graph=True)
             torch.nn.utils.clip_grad_norm(self.ac.parameters(), 40)
             self.actor_optim.step()
             self.ac.zero_grad()
@@ -147,18 +148,66 @@ class A2C_Discrete(object):
         torch.cuda.manual_seed(s)
 
 
+class Ledger():
+    def __init__(self, max_entries, decay_rate):
+        self.max_entries = max_entries; self.decay_rate = decay_rate
+        self.ledger = list()
+
+    def post(self, loc, cost):
+        if cost > random.random(): self.ledger.append((1.0, loc))
+
+    def get_knn(self, loc): #TODO Make it knn (currently k = 1)
+        min_dist = 1000; closest_loc = [None, None]
+        for _, entries in self.ledger:
+            dist = abs(loc[0]-entries[0][0]) + abs(loc[1]-entries[0][1])
+            if dist < min_dist:
+                min_dist = dist
+                closest_loc = [entries[0][0], entries[0][1]]
+        if min_dist == 1000: min_dist = -1
+        return closest_loc, min_dist
+
+    def reset(self):
+        self.ledger = list()
+
+    def decay(self):
+        del_list = []
+        for stay_prob, entries in self.ledger:
+            if stay_prob <= random.random():
+                del_list.append((stay_prob, entries))
+                continue
+            stay_prob *= self.decay_rate
+
+        #Delete entries
+        for item in del_list:
+            self.ledger.remove(item)
+
+
 class Actor_Critic(nn.Module):
     def __init__(self, num_input, num_actions, args):
         super(Actor_Critic, self).__init__()
         self.args = args
 
         #Actor
+        #Primitive
         self.w_actor1 = Parameter(torch.rand(args.num_hnodes, num_input), requires_grad=1)
-        self.w_actor2 = Parameter(torch.rand(num_actions, args.num_hnodes), requires_grad=1)
+        self.w_actor2 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        self.w_actor3 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        self.w_actor4 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        self.w_actor5 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        self.w_actor6 = Parameter(torch.rand(num_actions, args.num_hnodes), requires_grad=1)
+
+
+        #Comm module
+        #self.w_actor_comm1 = Parameter(torch.rand(args.num_hnodes, num_input), requires_grad=1)
+        #self.w_actor_comm2 = Parameter(torch.rand(2, args.num_hnodes+4), requires_grad=1)
 
         #Critic
         self.w_critic1 = Parameter(torch.rand(args.num_hnodes, num_input), requires_grad=1)
-        self.w_critic2 = Parameter(torch.rand(1, args.num_hnodes), requires_grad=1)
+        self.w_critic2 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        self.w_critic3 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        self.w_critic4 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        self.w_critic5 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        self.w_critic6 = Parameter(torch.rand(1, args.num_hnodes), requires_grad=1)
 
         for param in self.parameters():
             #torch.nn.init.xavier_normal(param)
@@ -169,19 +218,45 @@ class Actor_Critic(nn.Module):
         self.cuda()
 
     def actor_forward(self, state):
+        #Primitive sub-network
         out = F.tanh(self.w_actor1.mm(state))
-        out = F.sigmoid(self.w_actor2.mm(out))
+        #out = F.leaky_relu(self.w_actor2.mm(out))
+        #out = F.leaky_relu(self.w_actor3.mm(out))
+        #out = F.leaky_relu(self.w_actor4.mm(out))
+        #out = F.relu(self.w_actor5.mm(out))
+        out = F.sigmoid(self.w_actor6.mm(out))
+
+
+        # action_softmax = F.log_softmax(prim2[0:-1,:], dim=0)
+        # comm = torch.log(prim2[-1:,:])
+        # out = torch.cat((action_softmax, comm))
+
+
+
+        #Comm module
+        #comm1 = F.tanh(self.w_actor_comm1.mm(state))
+        #out = F.sigmoid(self.w_actor_comm2.mm(out))
+        #out = F.log_softmax(out, dim=0)
+
+        #LOG SOFTMAX
         out = F.log_softmax(out, dim=0)
         return out
 
     def critic_forward(self, state):
         out = F.tanh(self.w_critic1.mm(state))
-        out = F.sigmoid(self.w_critic2.mm(out))
+        #out = F.leaky_relu(self.w_critic2.mm(out))
+        #out = F.leaky_relu(self.w_critic3.mm(out))
+        #out = F.leaky_relu(self.w_critic4.mm(out))
+        #out = F.relu(self.w_critic5.mm(out))
+        out = F.sigmoid(self.w_critic6.mm(out))
         return out
 
     def reset(self, batch_size=1):
         #self.mmu.reset(batch_size)
         pass
+
+
+
 
 
 def fanin_init(size, fanin=None):
@@ -195,7 +270,6 @@ def to_numpy(var):
 
 def to_tensor(ndarray, volatile=False, requires_grad=False):
     return Variable(torch.from_numpy(ndarray).float(), volatile=volatile, requires_grad=requires_grad).cuda()
-
 
 class OrnsteinUhlenbeckActionNoise:
     def __init__(self, mu, sigma=0.2, theta=.15, dt=1e-2, x0=None):

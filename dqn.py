@@ -14,6 +14,7 @@ import fastrand, math
 from torch.optim import Adam
 
 
+
 def prob_choice(prob):
     prob = prob/np.sum(prob)
     rand = random.random()
@@ -33,39 +34,40 @@ class Parameters:
 
         # Train data
         self.batch_size = 10000
-        self.num_episodes = 200000
+        self.num_episodes = 500000
         self.actor_epoch = 1; self.actor_lr = 0.005
         self.critic_epoch = 1; self.critic_lr = 0.005
 
         #Rover domain
-        self.dim_x = self.dim_y = 10; self.obs_radius = 15; self.act_dist = 1.1; self.angle_res = 15
-        self.num_poi = 2; self.num_rover = 4; self.num_timestep = 20
+        self.dim_x = self.dim_y = 20; self.obs_radius = 5; self.act_dist = 1.5; self.angle_res = 10
+        self.num_poi = 10; self.num_rover = 6; self.num_timestep = 25
         self.poi_rand = 1
         self.coupling = 2
+        self.rover_speed = 2
         self.sensor_model = 2 #1: Density Sensor
                               #2: Closest Sensor
 
         #Dependents
-        self.state_dim = 2*360 / self.angle_res #+ 2
-        self.action_dim = 5
-        self.epsilon = 0.5
-        self.alpha = 0.9
-        self.gamma = 0.9
+        self.state_dim = 2*360 / self.angle_res + 5
+        self.action_dim = 7
+        self.epsilon = 0.5; self.alpha = 0.9; self.gamma = 0.99
 
         #Replay Buffer
-        self.buffer_size = 1000000
+        self.buffer_size = 100000
         self.replay_buffer_choice = 1 #1: Normal Buffer (uniform sampling no prioritization)
                                       #2: Proportional sampling (priortizied)
                                       #3: Rank based (prioritized)
-                                      #4: Open AI Proportional Experience Replay #TODO
+                                      #4: Open AI Proportional Experience Replay self.params.rover_speed0#TODO
         self.conf = {'batch_size': 1000, 'bera_zero': 0.5, 'learn_start':1000, 'total_steps':self.num_episodes,
                      'size': self.buffer_size, 'replace_old':True, 'alpha':0.7}
 
         self.save_foldername = 'R_Block/'
         if not os.path.exists(self.save_foldername): os.makedirs(self.save_foldername)
 
-        #unit tests
-        self.unit_test = 0
+        #Unit tests (Simply changes the rover/poi init locations)
+        self.unit_test = 0 #0: None
+                           #1: Single Agent
+                           #2: Multiagent 2-coupled
 
 class Task_Rovers:
     def __init__(self, parameters):
@@ -77,11 +79,17 @@ class Task_Rovers:
 
         # Initialize rover position container
         self.rover_pos = [[0.0, 0.0] for _ in range(self.params.num_rover)]  # Track each rover's position
+        self.ledger_closest = [[0.0, 0.0] for _ in range(self.params.num_rover)]  # Track each rover's ledger call
 
     def reset_poi_pos(self):
 
         if self.params.unit_test == 1: #Unit_test
             self.poi_pos[0] = [0,1]
+            return
+
+        if self.params.unit_test == 2: #Unit_test
+            if random.random()<0.5: self.poi_pos[0] = [4,0]
+            else: self.poi_pos[0] = [4,9]
             return
 
         start = 1.0;
@@ -154,7 +162,8 @@ class Task_Rovers:
         self.reset_poi_pos()
         self.reset_rover_pos()
 
-    def get_state(self, rover_id):
+    def get_state(self, rover_id, ledger):
+
         #return mod.unsqueeze(np.array([self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]]), 1)
 
         self_x = self.rover_pos[rover_id][0]; self_y = self.rover_pos[rover_id][1]
@@ -204,11 +213,22 @@ class Task_Rovers:
                 else: state[bracket][1] = min(temp_rover_dist_list[bracket]) #Minimum Sensor
             else: state[bracket][1] = -1
 
+        state = state.flatten()
+        #Append wall info
+        state = np.concatenate((state, np.array([0.0, 0.0, 0.0, 0.0])))
+        if self_x - self.params.rover_speed < 0: state[-4] = 1.0
+        if self_x + self.params.rover_speed > self.params.dim_x-1: state[-3] = 1.0
+        if self_y - self.params.rover_speed < 0:state[-2] = 1.0
+        if self_y + self.params.rover_speed < self.params.dim_y-1:state[-1] = 1.0
 
+                #Add ledger and state vars
+        closest_loc, min_dist = ledger.get_knn([self_x, self_y])
+        if closest_loc[0] == None: closest_loc[0], closest_loc[1] = self_x, self_y
+        self.ledger_closest[rover_id] = [closest_loc[0], closest_loc[1]]
 
-        #state[-2,0], state[-1,0] = self_x, self_y
-        state = mod.unsqueeze(state.flatten(), 1)
-
+        #if rover_id == 1: state =  np.zeros((720 / self.params.angle_res)) - 2 #TODO TEST
+        state = np.concatenate((state, np.array([min_dist])))
+        state = mod.unsqueeze(state, 1)
         return state
 
     def get_angle_dist(self, x1, y1, x2,y2):  # Computes angles and distance between two predators relative to (1,0) vector (x-axis)
@@ -221,19 +241,33 @@ class Task_Rovers:
         dist = math.sqrt(dist)
         return angle, dist
 
-    def step(self, joint_action):
+    def step(self, joint_action, ledger):
 
         for rover_id in range(parameters.num_rover):
             action = joint_action[rover_id]
-            if action == 0: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]]
-            elif action == 1: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] + 1]
-            elif action == 2: new_pos = [self.rover_pos[rover_id][0] - 1, self.rover_pos[rover_id][1]]
-            elif action == 3: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] - 1]
-            elif action == 4: new_pos = [self.rover_pos[rover_id][0] + 1, self.rover_pos[rover_id][1]]
+            new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]] #Default position
+
+            if action == 1: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] + self.params.rover_speed]
+            elif action == 2: new_pos = [self.rover_pos[rover_id][0] - self.params.rover_speed, self.rover_pos[rover_id][1]]
+            elif action == 3: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1] - self.params.rover_speed]
+            elif action == 4: new_pos = [self.rover_pos[rover_id][0] + self.params.rover_speed, self.rover_pos[rover_id][1]]
+
+            elif action == 5: #Macro Action - Move towards the closest nbr in ledger
+                tow_vector = [self.ledger_closest[rover_id][0] - self.rover_pos[rover_id][0], self.ledger_closest[rover_id][1] - self.rover_pos[rover_id][1]]
+                if tow_vector[0] > 0: new_pos = [self.rover_pos[rover_id][0] + self.params.rover_speed, self.rover_pos[rover_id][1]]
+                elif tow_vector[0] < 0: new_pos = [self.rover_pos[rover_id][0] - self.params.rover_speed, self.rover_pos[rover_id][1]]
+                elif tow_vector[1] > 0: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]+self.params.rover_speed]
+                elif tow_vector[1] < 0: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]-self.params.rover_speed]
+
+            elif action == 6:
+                ledger.post([[self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]]], cost=1.0)
 
             #Check if action is legal
             if not(new_pos[0] >= self.dim_x or new_pos[0] < 0 or new_pos[1] >= self.dim_y or new_pos[1] < 0):  #If legal
                 self.rover_pos[rover_id] = [new_pos[0], new_pos[1]] #Execute action
+
+        #Reset Ledger closest
+        self.ledger_closest = [[0.0, 0.0] for _ in range(self.params.num_rover)]  # Track each rover's ledger call
 
     def get_reward(self):
         #Update POI's visibility
@@ -261,14 +295,13 @@ class Task_Rovers:
         grid = [['-' for _ in range(self.dim_x)] for _ in range(self.dim_y)]
 
         # Draw in hive
-        drone_symbol_bank = ["@", '#', '$', '%', '&']
+        drone_symbol_bank = ["0", "1", '2', '3', '4', '5']
         for rover_pos, symbol in zip(self.rover_pos, drone_symbol_bank):
             x = int(rover_pos[0]); y = int(rover_pos[1])
-            print x,y
+            #print x,y
             grid[x][y] = symbol
 
-        symbol_bank = ['Q', 'W', 'E', 'R', 'T', 'Y']
-        poison_symbol_bank = ['1', "2", '3', '4', '5', '6']
+
         # Draw in food
         for loc, status in zip(self.poi_pos, self.poi_status):
             x = int(loc[0]); y = int(loc[1])
@@ -278,7 +311,6 @@ class Task_Rovers:
         for row in grid:
             print row
         print
-
 
 class Tracker(): #Tracker
     def __init__(self, parameters, vars_string, project_string):
@@ -308,27 +340,99 @@ class Tracker(): #Tracker
                 np.savetxt(filename, np.array(var[2]), fmt='%.3f', delimiter=',')
 
 
-def test_env(env, agent, parameters):
-    env.reset()  # Reset environment
+def visualize_episode(env, agent, parameters):
     episode_reward = 0.0
+    env.reset()  # Reset environment
+    agent.ledger.reset()  # Reset ledger
     for timestep in range(parameters.num_timestep):  # Each timestep
 
         # Get current state from environment
         joint_state = []
-        for rover_id in range(parameters.num_rover): joint_state.append(mod.to_tensor(env.get_state(rover_id)))
+        for rover_id in range(parameters.num_rover): joint_state.append(
+            mod.to_tensor(env.get_state(rover_id, agent.ledger)))
         joint_state_T = torch.cat(joint_state, 1)
 
         # Get action
         joint_action_prob = mod.to_numpy(agent.ac.actor_forward(joint_state_T))  # [probs, batch]
-        actions = np.argmax(joint_action_prob, axis=0)  # Grredy max value action selection
-        # greedy_actions = np.random.choice(np.flatnonzero(prob == prob.max())) #TODO Break Argmax bias towards index clashes (use random choice between same values)
+        #actions = np.argmax(joint_action_prob, axis=0)  # Greedy max value action selection
+        greedy_actions = []  # Greedy actions breaking ties
+        for i in range(len(joint_action_prob[0])):
+            max = np.max(joint_action_prob[:, i])
+            greedy_actions.append(np.random.choice(np.where(max == joint_action_prob[:, i])[0]))# greedy_actions = np.random.choice(np.flatnonzero(prob == prob.max())) #TODO Break Argmax bias towards index clashes (use random choice between same values)
+
+        actions = np.array(greedy_actions)
 
         # Run enviornment one step up and get reward
-        env.step(actions)
+        env.step(actions, agent.ledger)
         joint_rewards = env.get_reward()
-        episode_reward += sum(joint_rewards)
+        episode_reward += sum(joint_rewards) / parameters.coupling
 
-        env.visualize() #Visualize
+        env.visualize()
+    print agent.ledger.ledger
+
+    return episode_reward
+
+def trace_viz(env, agent, parameters):
+    episode_reward = 0.0
+    env.reset()  # Reset environment
+    agent.ledger.reset()  # Reset ledger
+
+    rover_path = [[(loc[0], loc[1])] for loc in env.rover_pos]
+    for timestep in range(parameters.num_timestep):  # Each timestep
+
+        # Get current state from environment
+        joint_state = []
+        for rover_id in range(parameters.num_rover): joint_state.append(mod.to_tensor(env.get_state(rover_id, agent.ledger)))
+        joint_state_T = torch.cat(joint_state, 1)
+
+        # Get action
+        joint_action_prob = mod.to_numpy(agent.ac.actor_forward(joint_state_T))  # [probs, batch]
+        #actions = np.argmax(joint_action_prob, axis=0)  # Greedy max value action selection
+        greedy_actions = []  # Greedy actions breaking ties
+        for i in range(len(joint_action_prob[0])):
+            max = np.max(joint_action_prob[:, i])
+            greedy_actions.append(np.random.choice(np.where(max == joint_action_prob[:, i])[0]))# greedy_actions = np.random.choice(np.flatnonzero(prob == prob.max())) #TODO Break Argmax bias towards index clashes (use random choice between same values)
+
+        actions = np.array(greedy_actions)
+        #if random.random() < 0.5:
+            #actions = np.random.randint(0, parameters.action_dim, parameters.num_rover)
+
+        # Run enviornment one step up and get reward
+        env.step(actions, agent.ledger)
+        joint_rewards = env.get_reward()
+        episode_reward += sum(joint_rewards) / parameters.coupling
+
+        #Append rover path
+        for rover_id in range(parameters.num_rover): rover_path[rover_id].append((env.rover_pos[rover_id][0],env.rover_pos[rover_id][1]))
+
+
+    #Visualize
+    grid = [['-' for _ in range(env.dim_x)] for _ in range(env.dim_y)]
+
+    drone_symbol_bank = ["0", "1", '2', '3', '4', '5']
+    # Draw in rover path
+    for rover_id in range(parameters.num_rover):
+        for time in range(parameters.num_timestep):
+            x = int(rover_path[rover_id][time][0]);
+            y = int(rover_path[rover_id][time][1])
+            # print x,y
+            grid[x][y] = drone_symbol_bank[rover_id]
+
+    # Draw in food
+    for loc, status in zip(env.poi_pos, env.poi_status):
+        x = int(loc[0]);
+        y = int(loc[1])
+        marker = 'I' if status else 'A'
+        grid[x][y] = marker
+
+    for row in grid:
+        print row
+    print
+
+
+
+    #env.visualize()
+    print agent.ledger.ledger
 
     return episode_reward
 
@@ -383,34 +487,48 @@ if __name__ == "__main__":
 
     for episode in range(1, parameters.num_episodes): #Each episode
         episode_reward = 0.0;
-
         env.reset() #Reset environment
+        agent.ledger.reset() #Reset ledger
         for timestep in range(parameters.num_timestep): #Each timestep
+
 
             # Get current state from environment
             joint_state = []
-            for rover_id in range(parameters.num_rover): joint_state.append(mod.to_tensor(env.get_state(rover_id)))
+            for rover_id in range(parameters.num_rover): joint_state.append(mod.to_tensor(env.get_state(rover_id, agent.ledger)))
             joint_state_T = torch.cat(joint_state, 1)
 
             # Get action
             joint_action_prob = mod.to_numpy(agent.ac.actor_forward(joint_state_T)) #[probs, batch]
-            greedy_actions = np.argmax(joint_action_prob, axis=0) #Grredy max value action selection
-            #greedy_actions = np.random.choice(np.flatnonzero(prob == prob.max())) #TODO Break Argmax bias towards index clashes (use random choice between same values)
+
+            greedy_actions = [] #Greedy actions breaking ties
+            for i in range(len(joint_action_prob[0])):
+                max = np.max(joint_action_prob[:,i])
+                greedy_actions.append(np.random.choice(np.where(max == joint_action_prob[:,i])[0]))
+            greedy_actions = np.array(greedy_actions)
+
+            # #Check
+            # diversity = False
+            # comp_entry = greedy_actions[0]
+            # for entry in greedy_actions:
+            #     if entry != comp_entry: print greedy_actions
+
 
             #Epsilon greedy exploration through action choice perturbation
             rand = np.random.uniform(0,1,parameters.num_rover)
             is_perturb = rand < parameters.epsilon
             if episode % 20 == 0: is_perturb = np.zeros(parameters.num_rover).astype(bool) #Greedy for these test episodes
-            actions = np.multiply(greedy_actions, (np.invert(is_perturb))) + np.multiply(np.random.randint(0,4, parameters.num_rover), (is_perturb))
+            actions = np.multiply(greedy_actions, (np.invert(is_perturb))) + np.multiply(np.random.randint(0, parameters.action_dim, parameters.num_rover), (is_perturb))
+
 
             # Run enviornment one step up and get reward
-            env.step(actions)
+            env.step(actions, agent.ledger)
+            #if episode % 20 == 0: print actions
             joint_rewards = env.get_reward()
             episode_reward += sum(joint_rewards)/parameters.coupling
 
             #Get new state
             joint_next_state = []
-            for rover_id in range(parameters.num_rover): joint_next_state.append(mod.to_tensor(env.get_state(rover_id)))
+            for rover_id in range(parameters.num_rover): joint_next_state.append(mod.to_tensor(env.get_state(rover_id, agent.ledger)))
 
             #Add to memory
             for state, new_state, action, reward in zip(joint_state, joint_next_state, actions, joint_rewards):
@@ -429,7 +547,8 @@ if __name__ == "__main__":
             print 'Gen', episode, 'Reward', episode_reward, 'Aggregrate', "%0.2f" % tracker.all_tracker[0][1], 'Epsilon', "%0.2f" %parameters.epsilon#, 'Mem_size', agent.replay_buffer.size() 'Exp_Success:', "%0.2f" % (explore_success/episode),
 
 
-        if episode % 200 == 0: test_env(env, agent, parameters)
+        #if episode % 200 == 0: visualize_episode(env, agent, parameters)
+        if episode % 20 == 0: trace_viz(env, agent, parameters)
         #if episode % 50 == 0: v_check(env, agent.ac, parameters)
         #if episode % 50 == 0: actor_check(env, agent.ac, parameters)
 
