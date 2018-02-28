@@ -1,17 +1,14 @@
-import numpy as np, os, math
+import os, random, math
 import mod_dqn as mod
 from random import randint
-import random
-import cPickle
-import torch.nn as nn
-from torch.autograd import Variable
-from torch.nn import Parameter
-import random
 import numpy as np, torch
-import torch.nn.functional as F
-from scipy.special import expit
-import fastrand, math
-from torch.optim import Adam
+
+
+def oracle2(env, timestep):
+    if timestep <= 3: return [1,3]
+    if env.poi_pos[0][0] == 4 and env.poi_pos[0][1] == 9: return [6,5]
+    elif env.poi_pos[0][0] == 4 and env.poi_pos[0][1] == 0: return [5,6]
+
 
 
 
@@ -39,11 +36,11 @@ class Parameters:
         self.critic_epoch = 1; self.critic_lr = 0.005
 
         #Rover domain
-        self.dim_x = self.dim_y = 20; self.obs_radius = 5; self.act_dist = 1.5; self.angle_res = 10
-        self.num_poi = 10; self.num_rover = 6; self.num_timestep = 25
+        self.dim_x = self.dim_y = 10; self.obs_radius = 3; self.act_dist = 1.0; self.angle_res = 30
+        self.num_poi = 2; self.num_rover = 6; self.num_timestep = 15
         self.poi_rand = 1
-        self.coupling = 2
-        self.rover_speed = 2
+        self.coupling = 3
+        self.rover_speed = 1
         self.sensor_model = 2 #1: Density Sensor
                               #2: Closest Sensor
 
@@ -51,6 +48,7 @@ class Parameters:
         self.state_dim = 2*360 / self.angle_res + 5
         self.action_dim = 7
         self.epsilon = 0.5; self.alpha = 0.9; self.gamma = 0.99
+        self.reward_crush = 0.1 #Crush reward to prevent numerical issues
 
         #Replay Buffer
         self.buffer_size = 100000
@@ -80,6 +78,11 @@ class Task_Rovers:
         # Initialize rover position container
         self.rover_pos = [[0.0, 0.0] for _ in range(self.params.num_rover)]  # Track each rover's position
         self.ledger_closest = [[0.0, 0.0] for _ in range(self.params.num_rover)]  # Track each rover's ledger call
+
+        #Macro Action trackers
+        self.util_macro = [[False, False, False] for _ in range(self.params.num_rover)] #Macro utilities to track [Is_currently_active?, Is_activated_now?, Is_reached_destination?]
+
+
 
     def reset_poi_pos(self):
 
@@ -129,9 +132,6 @@ class Task_Rovers:
                     y = center+i/4#randint(center + rad + 1, end)
                 self.poi_pos[i] = [x, y]
 
-    def reset_poi_status(self):
-        self.poi_status = self.poi_status = [False for _ in range(self.params.num_poi)]
-
     def reset_rover_pos(self):
         start = 1.0; end = self.dim_x - 1.0
         rad = int(self.dim_x / math.sqrt(3) / 2.0)
@@ -147,7 +147,7 @@ class Task_Rovers:
                     x = center - 1 - (rover_id / 4) % (center - rad)
                     y = center - (rover_id / (4 * center - rad)) % (center - rad)
                 if quadrant == 1:
-                    x = center + (rover_id / (4 * center - rad)) % (center - rad)
+                    x = center + (rover_id / (4 * center - rad)) % (center - rad)-1
                     y = center - 1 + (rover_id / 4) % (center - rad)
                 if quadrant == 2:
                     x = center + 1 + (rover_id / 4) % (center - rad)
@@ -158,11 +158,17 @@ class Task_Rovers:
                 self.rover_pos[rover_id] = [x, y]
 
     def reset(self):
-        self.reset_poi_status()
         self.reset_poi_pos()
         self.reset_rover_pos()
+        self.poi_status = self.poi_status = [False for _ in range(self.params.num_poi)]
+        self.util_macro = [[False, False, False] for _ in range(self.params.num_rover)]  # Macro utilities to track [Is_currently_active?, Is_activated_now?, Is_reached_destination?]
 
     def get_state(self, rover_id, ledger):
+        if self.util_macro[rover_id][0]: #If currently active
+            if self.util_macro[rover_id][1] == False: #Not first time activate (Not Is-activated-now)
+                return np.zeros((720/self.params.angle_res + 5, 1)) -10000 #If macro return none
+            else:
+                self.util_macro[rover_id][1] = False  # Turn off is_activated_now?
 
         #return mod.unsqueeze(np.array([self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]]), 1)
 
@@ -215,13 +221,13 @@ class Task_Rovers:
 
         state = state.flatten()
         #Append wall info
-        state = np.concatenate((state, np.array([0.0, 0.0, 0.0, 0.0])))
-        if self_x - self.params.rover_speed < 0: state[-4] = 1.0
-        if self_x + self.params.rover_speed > self.params.dim_x-1: state[-3] = 1.0
-        if self_y - self.params.rover_speed < 0:state[-2] = 1.0
-        if self_y + self.params.rover_speed < self.params.dim_y-1:state[-1] = 1.0
+        state = np.concatenate((state, np.array([-1.0, -1.0, -1.0, -1.0])))
+        if self_x <= self.params.obs_radius: state[-4] = self_x
+        if self.params.dim_x - self_x <= self.params.obs_radius: state[-3] = self.params.dim_x - self_x
+        if self_y <= self.params.obs_radius :state[-2] = self_y
+        if self.params.dim_y - self_y <= self.params.obs_radius: state[-1] = self.params.dim_y - self_y
 
-                #Add ledger and state vars
+        #Add ledger and state vars
         closest_loc, min_dist = ledger.get_knn([self_x, self_y])
         if closest_loc[0] == None: closest_loc[0], closest_loc[1] = self_x, self_y
         self.ledger_closest[rover_id] = [closest_loc[0], closest_loc[1]]
@@ -259,15 +265,16 @@ class Task_Rovers:
                 elif tow_vector[1] > 0: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]+self.params.rover_speed]
                 elif tow_vector[1] < 0: new_pos = [self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]-self.params.rover_speed]
 
+                if new_pos[0] == self.ledger_closest[rover_id][0] and new_pos[1] == self.ledger_closest[rover_id][1]:
+                    self.util_macro[rover_id][0] = False #Turn off is active
+                    self.util_macro[rover_id][2] = True  #Turn on Is_reached_destination
+
             elif action == 6:
                 ledger.post([[self.rover_pos[rover_id][0], self.rover_pos[rover_id][1]]], cost=1.0)
 
             #Check if action is legal
             if not(new_pos[0] >= self.dim_x or new_pos[0] < 0 or new_pos[1] >= self.dim_y or new_pos[1] < 0):  #If legal
                 self.rover_pos[rover_id] = [new_pos[0], new_pos[1]] #Execute action
-
-        #Reset Ledger closest
-        self.ledger_closest = [[0.0, 0.0] for _ in range(self.params.num_rover)]  # Track each rover's ledger call
 
     def get_reward(self):
         #Update POI's visibility
@@ -286,7 +293,8 @@ class Task_Rovers:
             if len(rovers) >= self.params.coupling:
                 self.poi_status[poi_id] = True
                 lucky_rovers = random.sample(rovers, self.params.coupling)
-                for rover_id in lucky_rovers: rewards[rover_id] += 1.0/self.params.num_poi
+                for rover_id in lucky_rovers: rewards[rover_id] += 1.0 * self.params.reward_crush/self.params.num_poi
+
 
         return rewards
 
@@ -376,9 +384,11 @@ def trace_viz(env, agent, parameters):
     episode_reward = 0.0
     env.reset()  # Reset environment
     agent.ledger.reset()  # Reset ledger
-
+    macro_experience = [[None, None, None, None] for _ in range(parameters.num_rover)]  # Bucket to store macro actions (time extended) experiences.
     rover_path = [[(loc[0], loc[1])] for loc in env.rover_pos]
-    for timestep in range(parameters.num_timestep):  # Each timestep
+    action_diversity = [[0, 0, 0, 0, 0,0,0] for _ in range(parameters.num_rover)]
+
+    for timestep in range(1, parameters.num_timestep+1): #Each timestep
 
         # Get current state from environment
         joint_state = []
@@ -386,21 +396,41 @@ def trace_viz(env, agent, parameters):
         joint_state_T = torch.cat(joint_state, 1)
 
         # Get action
-        joint_action_prob = mod.to_numpy(agent.ac.actor_forward(joint_state_T))  # [probs, batch]
-        #actions = np.argmax(joint_action_prob, axis=0)  # Greedy max value action selection
-        greedy_actions = []  # Greedy actions breaking ties
-        for i in range(len(joint_action_prob[0])):
-            max = np.max(joint_action_prob[:, i])
-            greedy_actions.append(np.random.choice(np.where(max == joint_action_prob[:, i])[0]))# greedy_actions = np.random.choice(np.flatnonzero(prob == prob.max())) #TODO Break Argmax bias towards index clashes (use random choice between same values)
+        joint_action_prob = mod.to_numpy(agent.ac.actor_forward(joint_state_T)) #[probs, batch]
 
+        greedy_actions = [] #Greedy actions breaking ties
+        for i in range(len(joint_action_prob[0])):
+            max = np.max(joint_action_prob[:,i])
+            greedy_actions.append(np.random.choice(np.where(max == joint_action_prob[:,i])[0]))
         actions = np.array(greedy_actions)
-        #if random.random() < 0.5:
-            #actions = np.random.randint(0, parameters.action_dim, parameters.num_rover)
+
+        #Track actions
+        for rover_id, a in enumerate(actions):
+            action_diversity[rover_id][a] += 1
+            if env.util_macro[rover_id][0]: action_diversity[rover_id][a] -= 1
+
+
+        #Macro action to macro (time-extended macro action)
+        for rover_id, entry in enumerate(env.util_macro):
+             if actions[rover_id] == 5 and entry[0] == False: #Macro action first state
+                 env.util_macro[rover_id][0] = True #Turn on is_currently_active?
+                 env.util_macro[rover_id][1] = True #Turn on is_activated_now?
+                 macro_experience[rover_id][0] = joint_state[rover_id]
+                 macro_experience[rover_id][2] = actions[rover_id]
+
+             if entry[0]:
+                 actions[rover_id] = 5 #Macro action continuing
 
         # Run enviornment one step up and get reward
         env.step(actions, agent.ledger)
         joint_rewards = env.get_reward()
-        episode_reward += sum(joint_rewards) / parameters.coupling
+        episode_reward += sum(joint_rewards)/parameters.coupling
+
+        #Process macro experiences and add to memory
+        for rover_id, exp in enumerate(macro_experience):
+            if env.util_macro[rover_id][2]: #If reached destination
+                env.util_macro[rover_id][2] = False
+                macro_experience[rover_id] = [None, None, None, None]
 
         #Append rover path
         for rover_id in range(parameters.num_rover): rover_path[rover_id].append((env.rover_pos[rover_id][0],env.rover_pos[rover_id][1]))
@@ -409,7 +439,7 @@ def trace_viz(env, agent, parameters):
     #Visualize
     grid = [['-' for _ in range(env.dim_x)] for _ in range(env.dim_y)]
 
-    drone_symbol_bank = ["0", "1", '2', '3', '4', '5']
+    drone_symbol_bank = ["0", "1", '2', '3', '4', '5', '6','7','8','9','10','11']
     # Draw in rover path
     for rover_id in range(parameters.num_rover):
         for time in range(parameters.num_timestep):
@@ -428,12 +458,9 @@ def trace_viz(env, agent, parameters):
     for row in grid:
         print row
     print
-
-
-
-    #env.visualize()
+    print action_diversity
     print agent.ledger.ledger
-
+    print '------------------------------------------------------------------------'
     return episode_reward
 
 def v_check(env, critic, params):
@@ -481,16 +508,16 @@ if __name__ == "__main__":
     parameters = Parameters()  # Create the Parameters class
     env = Task_Rovers(parameters)
     agent = mod.A2C_Discrete(parameters)
-    actor_noise = mod.OrnsteinUhlenbeckActionNoise(mu=np.zeros(parameters.action_dim))
+    #actor_noise = mod.OrnsteinUhlenbeckActionNoise(mu=np.zeros(parameters.action_dim))
     tracker = Tracker(parameters, ['rewards'], '')
 
 
-    for episode in range(1, parameters.num_episodes): #Each episode
-        episode_reward = 0.0;
-        env.reset() #Reset environment
-        agent.ledger.reset() #Reset ledger
-        for timestep in range(parameters.num_timestep): #Each timestep
 
+    for episode in range(1, parameters.num_episodes, 1): #Each episode
+        episode_reward = 0.0; env.reset() #Reset environment
+        agent.ledger.reset() #Reset ledger
+        macro_experience = [[None, None, None, None] for _ in range(parameters.num_rover)] #Bucket to store macro actions (time extended) experiences.
+        for timestep in range(1, parameters.num_timestep+1): #Each timestep
 
             # Get current state from environment
             joint_state = []
@@ -506,13 +533,6 @@ if __name__ == "__main__":
                 greedy_actions.append(np.random.choice(np.where(max == joint_action_prob[:,i])[0]))
             greedy_actions = np.array(greedy_actions)
 
-            # #Check
-            # diversity = False
-            # comp_entry = greedy_actions[0]
-            # for entry in greedy_actions:
-            #     if entry != comp_entry: print greedy_actions
-
-
             #Epsilon greedy exploration through action choice perturbation
             rand = np.random.uniform(0,1,parameters.num_rover)
             is_perturb = rand < parameters.epsilon
@@ -520,24 +540,51 @@ if __name__ == "__main__":
             actions = np.multiply(greedy_actions, (np.invert(is_perturb))) + np.multiply(np.random.randint(0, parameters.action_dim, parameters.num_rover), (is_perturb))
 
 
+            #ORACLE
+            #if episode % 13 == 0: actions = oracle2(env, timestep)
+
+
+            #Macro action to macro (time-extended macro action)
+            for rover_id, entry in enumerate(env.util_macro):
+                 if actions[rover_id] == 5 and entry[0] == False: #Macro action first state
+                     env.util_macro[rover_id][0] = True #Turn on is_currently_active?
+                     env.util_macro[rover_id][1] = True #Turn on is_activated_now?
+                     macro_experience[rover_id][0] = joint_state[rover_id]
+                     macro_experience[rover_id][2] = actions[rover_id]
+
+
+                 if entry[0]: actions[rover_id] = 5 #Macro action continuing
+
             # Run enviornment one step up and get reward
             env.step(actions, agent.ledger)
-            #if episode % 20 == 0: print actions
             joint_rewards = env.get_reward()
-            episode_reward += sum(joint_rewards)/parameters.coupling
+            episode_reward += (sum(joint_rewards)/parameters.coupling)/parameters.reward_crush
+
 
             #Get new state
             joint_next_state = []
             for rover_id in range(parameters.num_rover): joint_next_state.append(mod.to_tensor(env.get_state(rover_id, agent.ledger)))
 
+            #Add new state and reward to macro-action (time extended) considerations
+            for rover_id, entry in enumerate(env.util_macro):
+                if entry[2]: #If reached destination
+                    macro_experience[rover_id][1] = joint_next_state[rover_id]
+                    macro_experience[rover_id][3] = joint_rewards[rover_id]
+
             #Add to memory
             for state, new_state, action, reward in zip(joint_state, joint_next_state, actions, joint_rewards):
+                if action == 5: continue #Skip the ones currently executing a macro action (not the one who just chose it).
                 add_experience(parameters, state, new_state, action, reward, agent)
 
-        #if episode_reward > 0: explore_success += 1
+            #Process macro experiences and add to memory
+            for rover_id, exp in enumerate(macro_experience):
+                if env.util_macro[rover_id][2]: #If reached destination
+                    env.util_macro[rover_id][2] = False
+                    add_experience(parameters, macro_experience[rover_id][0], macro_experience[rover_id][1], macro_experience[rover_id][2], macro_experience[rover_id][3], agent)
+                    macro_experience[rover_id] = [None, None, None, None]
+
 
         #Gradient update periodically
-        #print episode, episode_reward
         if episode % 20 == 0:
             tracker.update([episode_reward], episode)
             agent.update_critic(episode)

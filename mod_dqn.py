@@ -82,7 +82,7 @@ class A2C_Discrete(object):
             policy_loss =  -(dt * alogs)
             policy_loss = policy_loss.mean()
             policy_loss.backward(retain_graph=True)
-            torch.nn.utils.clip_grad_norm(self.ac.parameters(), 40)
+            #torch.nn.utils.clip_grad_norm(self.ac.parameters(), 40)
             self.actor_optim.step()
             self.ac.zero_grad()
 
@@ -102,7 +102,7 @@ class A2C_Discrete(object):
 
             loss = self.criterion(vals, targets)
             loss.backward(retain_graph = True)
-            torch.nn.utils.clip_grad_norm(self.ac.parameters(), 40)
+            #torch.nn.utils.clip_grad_norm(self.ac.parameters(), 40)
             self.critic_optim.step()
             self.ac.zero_grad()
             new_states.volatile = False
