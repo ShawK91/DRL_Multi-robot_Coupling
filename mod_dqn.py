@@ -31,7 +31,7 @@ class A2C_Discrete(object):
         if self.args.replay_buffer_choice == 1: self.replay_buffer = pr_uniform(self.args.buffer_size, random.randint(1,10000))
         if self.args.replay_buffer_choice == 2: self.replay_buffer = pr_proportional.Experience(self.args.conf)
         if self.args.replay_buffer_choice == 3: self.replay_buffer = pr_rank.Experience(self.args.conf)
-        if self.args.replay_buffer_choice == 4: self.replay_buffer = pr_ai.PrioritizedReplayBuffer(self.args.buffer_size, self.args.alpha)
+        if self.args.replay_buffer_choice == 4: self.replay_buffer = Memory(self.args.buffer_size)
 
         # Hyper-parameters
         self.batch_size = args.batch_size
@@ -46,12 +46,20 @@ class A2C_Discrete(object):
             data = None
 
         if self.args.replay_buffer_choice == 2 or self.args.replay_buffer_choice == 3:
-            data = self.replay_buffer.sample(episode, self.args.batch_size)
+            data = self.replay_buffer.sample(self.args.batch_size)
             batch_data = np.array(data[0])
             states = torch.cat(list(batch_data[:, 0]), 1)
             new_states = torch.cat(list(batch_data[:, 1]), 1)
             actions = list(batch_data[:, 2])
             rewards = to_tensor(np.array(list(batch_data[:, 3]))).unsqueeze(0)
+
+        if self.args.replay_buffer_choice == 4:
+            data = self.replay_buffer.sample(self.args.batch_size)
+            batch_data = np.array(data[0])
+            states = torch.cat([ o[1][0] for o in data], 1)
+            new_states = torch.cat([ o[1][1] for o in data], 1)
+            actions = [ o[1][2] for o in data]
+            rewards = to_tensor(np.array([ o[1][3] for o in data])).unsqueeze(0)
 
         return states, new_states, actions, rewards, data
 
@@ -66,12 +74,17 @@ class A2C_Discrete(object):
         action_logs = self.ac.actor_forward(states)
 
         dt = rewards + self.gamma * new_vals - vals
-        dt = to_tensor(to_numpy(dt))
+        dt = to_numpy(dt)
 
         #Update priorities
         if self.args.replay_buffer_choice == 2: data[1][:] = np.reshape(np.abs(to_numpy(dt)), (len(dt[0])))[:]
+        if self.args.replay_buffer_choice == 4:
+            for i in range(len(data)):
+                self.replay_buffer.update(data[i][0], abs(dt[0][i]))
 
 
+
+        dt = to_tensor(dt)
         alogs = []
         for i, action in enumerate(actions):
             alogs.append(action_logs[action, i])
@@ -255,8 +268,90 @@ class Actor_Critic(nn.Module):
         #self.mmu.reset(batch_size)
         pass
 
+class Memory:   # stored as ( s, a, r, s_ ) in SumTree
+    e = 0.01
+    a = 0.6
 
+    def __init__(self, capacity):
+        self.tree = SumTree(capacity)
 
+    def _getPriority(self, error):
+        return (error + self.e) ** self.a
+
+    def add(self, error, sample):
+        p = self._getPriority(error)
+        self.tree.add(p, sample)
+
+    def sample(self, n):
+        batch = []
+        segment = self.tree.total() / n
+
+        for i in range(n):
+            a = segment * i
+            b = segment * (i + 1)
+
+            s = random.uniform(a, b)
+            (idx, p, data) = self.tree.get(s)
+            batch.append( (idx, data) )
+
+        return batch
+
+    def update(self, idx, error):
+        p = self._getPriority(error)
+        self.tree.update(idx, p)
+
+class SumTree:
+    write = 0
+
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.tree = np.zeros( 2*capacity - 1 )
+        self.data = np.zeros( capacity, dtype=object )
+
+    def _propagate(self, idx, change):
+        parent = (idx - 1) // 2
+
+        self.tree[parent] += change
+
+        if parent != 0:
+            self._propagate(parent, change)
+
+    def _retrieve(self, idx, s):
+        left = 2 * idx + 1
+        right = left + 1
+
+        if left >= len(self.tree):
+            return idx
+
+        if s <= self.tree[left]:
+            return self._retrieve(left, s)
+        else:
+            return self._retrieve(right, s-self.tree[left])
+
+    def total(self):
+        return self.tree[0]
+
+    def add(self, p, data):
+        idx = self.write + self.capacity - 1
+
+        self.data[self.write] = data
+        self.update(idx, p)
+
+        self.write += 1
+        if self.write >= self.capacity:
+            self.write = 0
+
+    def update(self, idx, p):
+        change = p - self.tree[idx]
+
+        self.tree[idx] = p
+        self._propagate(idx, change)
+
+    def get(self, s):
+        idx = self._retrieve(0, s)
+        dataIdx = idx - self.capacity + 1
+
+        return (idx, self.tree[idx], self.data[dataIdx])
 
 
 def fanin_init(size, fanin=None):

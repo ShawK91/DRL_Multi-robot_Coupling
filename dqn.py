@@ -9,9 +9,6 @@ def oracle2(env, timestep):
     if env.poi_pos[0][0] == 4 and env.poi_pos[0][1] == 9: return [6,5]
     elif env.poi_pos[0][0] == 4 and env.poi_pos[0][1] == 0: return [5,6]
 
-
-
-
 def prob_choice(prob):
     prob = prob/np.sum(prob)
     rand = random.random()
@@ -39,7 +36,7 @@ class Parameters:
         self.dim_x = self.dim_y = 10; self.obs_radius = 3; self.act_dist = 1.0; self.angle_res = 30
         self.num_poi = 2; self.num_rover = 6; self.num_timestep = 15
         self.poi_rand = 1
-        self.coupling = 3
+        self.coupling = 2
         self.rover_speed = 1
         self.sensor_model = 2 #1: Density Sensor
                               #2: Closest Sensor
@@ -52,10 +49,10 @@ class Parameters:
 
         #Replay Buffer
         self.buffer_size = 100000
-        self.replay_buffer_choice = 1 #1: Normal Buffer (uniform sampling no prioritization)
+        self.replay_buffer_choice = 4 #1: Normal Buffer (uniform sampling no prioritization)
                                       #2: Proportional sampling (priortizied)
                                       #3: Rank based (prioritized)
-                                      #4: Open AI Proportional Experience Replay self.params.rover_speed0#TODO
+                                      #4: PyBrain PER (prioritized)
         self.conf = {'batch_size': 1000, 'bera_zero': 0.5, 'learn_start':1000, 'total_steps':self.num_episodes,
                      'size': self.buffer_size, 'replace_old':True, 'alpha':0.7}
 
@@ -502,6 +499,7 @@ def actor_check(env, actor, params):
 def add_experience(args, state, new_state, action, reward, agent):
     if args.replay_buffer_choice == 1: agent.replay_buffer.add(state, new_state, action, reward)
     if args.replay_buffer_choice == 2 or args.replay_buffer_choice == 3: agent.replay_buffer.store([state, new_state, action, reward])
+    if args.replay_buffer_choice == 4: agent.replay_buffer.add(1.0, [state, new_state, action, reward])
 
 
 if __name__ == "__main__":
