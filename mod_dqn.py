@@ -8,9 +8,7 @@ import torch.nn.functional as F
 from scipy.special import expit
 import fastrand, math
 from torch.optim import Adam
-import Episodic_Buffer.proportional as pr_proportional
-import Episodic_Buffer.rank_based as pr_rank
-from Episodic_Buffer.Uniform_Buffer import ReplayBuffer as pr_uniform
+
 
 
 
@@ -28,10 +26,7 @@ class A2C_Discrete(object):
         self.critic_optim = Adam(self.ac.parameters(), lr=args.critic_lr)
 
         # Create replay buffer
-        if self.args.replay_buffer_choice == 1: self.replay_buffer = pr_uniform(self.args.buffer_size, random.randint(1,10000))
-        if self.args.replay_buffer_choice == 2: self.replay_buffer = pr_proportional.Experience(self.args.conf)
-        if self.args.replay_buffer_choice == 3: self.replay_buffer = pr_rank.Experience(self.args.conf)
-        if self.args.replay_buffer_choice == 4: self.replay_buffer = Memory(self.args.buffer_size)
+        self.replay_buffer = Memory(self.args.buffer_size)
 
         # Hyper-parameters
         self.batch_size = args.batch_size
@@ -39,28 +34,11 @@ class A2C_Discrete(object):
         self.criterion = nn.MSELoss() #nn.SmoothL1Loss()
 
     def sample_memory(self, episode):
-        if self.args.replay_buffer_choice == 1:
-            states, new_states, actions, rewards = self.replay_buffer.sample_batch(batch_size=self.args.batch_size)
-            states = torch.cat(states, 1); new_states = torch.cat(new_states, 1)
-            rewards = to_tensor(np.array(rewards)).unsqueeze(0)
-            data = None
-
-        if self.args.replay_buffer_choice == 2 or self.args.replay_buffer_choice == 3:
-            data = self.replay_buffer.sample(self.args.batch_size)
-            batch_data = np.array(data[0])
-            states = torch.cat(list(batch_data[:, 0]), 1)
-            new_states = torch.cat(list(batch_data[:, 1]), 1)
-            actions = list(batch_data[:, 2])
-            rewards = to_tensor(np.array(list(batch_data[:, 3]))).unsqueeze(0)
-
-        if self.args.replay_buffer_choice == 4:
-            data = self.replay_buffer.sample(self.args.batch_size)
-            batch_data = np.array(data[0])
-            states = torch.cat([ o[1][0] for o in data], 1)
-            new_states = torch.cat([ o[1][1] for o in data], 1)
-            actions = [ o[1][2] for o in data]
-            rewards = to_tensor(np.array([ o[1][3] for o in data])).unsqueeze(0)
-
+        data = self.replay_buffer.sample(self.args.batch_size)
+        states = torch.cat([ o[1][0] for o in data], 1)
+        new_states = torch.cat([ o[1][1] for o in data], 1)
+        actions = [ o[1][2] for o in data]
+        rewards = to_tensor(np.array([ o[1][3] for o in data])).unsqueeze(0)
         return states, new_states, actions, rewards, data
 
     def update_actor(self, episode):
@@ -77,12 +55,7 @@ class A2C_Discrete(object):
         dt = to_numpy(dt)
 
         #Update priorities
-        if self.args.replay_buffer_choice == 2: data[1][:] = np.reshape(np.abs(to_numpy(dt)), (len(dt[0])))[:]
-        if self.args.replay_buffer_choice == 4:
-            for i in range(len(data)):
-                self.replay_buffer.update(data[i][0], abs(dt[0][i]))
-
-
+        for i in range(len(data)): self.replay_buffer.update(data[i][0], abs(dt[0][i]))
 
         dt = to_tensor(dt)
         alogs = []

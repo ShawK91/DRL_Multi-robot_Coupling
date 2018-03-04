@@ -29,9 +29,9 @@ class Parameters:
         # Train data
         self.batch_size = 10000
         self.num_episodes = 500000
-        self.actor_epoch = 1; self.actor_lr = 0.005
-        self.critic_epoch = 1; self.critic_lr = 0.005
-        self.update_frequency = 5
+        self.actor_epoch = 5; self.actor_lr = 0.005
+        self.critic_epoch = 5; self.critic_lr = 0.005
+        self.update_frequency = 20
 
         #Rover domain
         self.dim_x = self.dim_y = 25; self.obs_radius = 5; self.act_dist = 1.0; self.angle_res = 15
