@@ -31,12 +31,13 @@ class Parameters:
         self.num_episodes = 500000
         self.actor_epoch = 1; self.actor_lr = 0.005
         self.critic_epoch = 1; self.critic_lr = 0.005
+        self.update_frequency = 5
 
         #Rover domain
-        self.dim_x = self.dim_y = 10; self.obs_radius = 3; self.act_dist = 1.0; self.angle_res = 30
-        self.num_poi = 2; self.num_rover = 6; self.num_timestep = 15
+        self.dim_x = self.dim_y = 25; self.obs_radius = 5; self.act_dist = 1.0; self.angle_res = 15
+        self.num_poi = 10; self.num_rover = 4; self.num_timestep = 25
         self.poi_rand = 1
-        self.coupling = 2
+        self.coupling = 1
         self.rover_speed = 1
         self.sensor_model = 2 #1: Density Sensor
                               #2: Closest Sensor
@@ -49,12 +50,6 @@ class Parameters:
 
         #Replay Buffer
         self.buffer_size = 100000
-        self.replay_buffer_choice = 4 #1: Normal Buffer (uniform sampling no prioritization)
-                                      #2: Proportional sampling (priortizied)
-                                      #3: Rank based (prioritized)
-                                      #4: PyBrain PER (prioritized)
-        self.conf = {'batch_size': 1000, 'bera_zero': 0.5, 'learn_start':1000, 'total_steps':self.num_episodes,
-                     'size': self.buffer_size, 'replace_old':True, 'alpha':0.7}
 
         self.save_foldername = 'R_Block/'
         if not os.path.exists(self.save_foldername): os.makedirs(self.save_foldername)
@@ -497,9 +492,7 @@ def actor_check(env, actor, params):
     print
 
 def add_experience(args, state, new_state, action, reward, agent):
-    if args.replay_buffer_choice == 1: agent.replay_buffer.add(state, new_state, action, reward)
-    if args.replay_buffer_choice == 2 or args.replay_buffer_choice == 3: agent.replay_buffer.store([state, new_state, action, reward])
-    if args.replay_buffer_choice == 4: agent.replay_buffer.add(1.0, [state, new_state, action, reward])
+    agent.replay_buffer.add(1.0, [state, new_state, action, reward])
 
 
 if __name__ == "__main__":
@@ -534,7 +527,7 @@ if __name__ == "__main__":
             #Epsilon greedy exploration through action choice perturbation
             rand = np.random.uniform(0,1,parameters.num_rover)
             is_perturb = rand < parameters.epsilon
-            if episode % 20 == 0: is_perturb = np.zeros(parameters.num_rover).astype(bool) #Greedy for these test episodes
+            if episode % parameters.update_frequency == 0: is_perturb = np.zeros(parameters.num_rover).astype(bool) #Greedy for these test episodes
             actions = np.multiply(greedy_actions, (np.invert(is_perturb))) + np.multiply(np.random.randint(0, parameters.action_dim, parameters.num_rover), (is_perturb))
 
 
@@ -583,17 +576,15 @@ if __name__ == "__main__":
 
 
         #Gradient update periodically
-        if episode % 20 == 0:
+        if episode % parameters.update_frequency == 0:
             tracker.update([episode_reward], episode)
             agent.update_critic(episode)
-            if episode % 20 == 0:
-                agent.update_actor(episode)
-                #parameters.epsilon *= 0.99 #Anneal epsilon
+            agent.update_actor(episode)
             print 'Gen', episode, 'Reward', episode_reward, 'Aggregrate', "%0.2f" % tracker.all_tracker[0][1], 'Epsilon', "%0.2f" %parameters.epsilon#, 'Mem_size', agent.replay_buffer.size() 'Exp_Success:', "%0.2f" % (explore_success/episode),
 
 
         #if episode % 200 == 0: visualize_episode(env, agent, parameters)
-        if episode % 20 == 0: trace_viz(env, agent, parameters)
+        if episode % parameters.update_frequency == 0: trace_viz(env, agent, parameters)
         #if episode % 50 == 0: v_check(env, agent.ac, parameters)
         #if episode % 50 == 0: actor_check(env, agent.ac, parameters)
 
