@@ -4,22 +4,6 @@ from random import randint
 import numpy as np, torch
 
 
-def oracle2(env, timestep):
-    if timestep <= 3: return [1,3]
-    if env.poi_pos[0][0] == 4 and env.poi_pos[0][1] == 9: return [6,5]
-    elif env.poi_pos[0][0] == 4 and env.poi_pos[0][1] == 0: return [5,6]
-
-def prob_choice(prob):
-    prob = prob/np.sum(prob)
-    rand = random.random()
-    mass = 0.0
-    for i, val in enumerate(prob):
-        mass += val
-        if rand <+ mass: return i
-
-def soft_argmax(prob):
-    return np.random.choice(np.flatnonzero(prob == prob.max()))
-
 class Parameters:
     def __init__(self):
 
@@ -34,10 +18,10 @@ class Parameters:
         self.update_frequency = 20
 
         #Rover domain
-        self.dim_x = self.dim_y = 25; self.obs_radius = 5; self.act_dist = 1.0; self.angle_res = 15
-        self.num_poi = 10; self.num_rover = 4; self.num_timestep = 25
+        self.dim_x = self.dim_y = 10; self.obs_radius = 3; self.act_dist = 1.0; self.angle_res = 15
+        self.num_poi = 1; self.num_rover = 2; self.num_timestep = 15
         self.poi_rand = 1
-        self.coupling = 1
+        self.coupling = 2
         self.rover_speed = 1
         self.sensor_model = 2 #1: Density Sensor
                               #2: Closest Sensor
@@ -55,7 +39,7 @@ class Parameters:
         if not os.path.exists(self.save_foldername): os.makedirs(self.save_foldername)
 
         #Unit tests (Simply changes the rover/poi init locations)
-        self.unit_test = 0 #0: None
+        self.unit_test = 2 #0: None
                            #1: Single Agent
                            #2: Multiagent 2-coupled
 
@@ -73,8 +57,6 @@ class Task_Rovers:
 
         #Macro Action trackers
         self.util_macro = [[False, False, False] for _ in range(self.params.num_rover)] #Macro utilities to track [Is_currently_active?, Is_activated_now?, Is_reached_destination?]
-
-
 
     def reset_poi_pos(self):
 
@@ -339,172 +321,19 @@ class Tracker(): #Tracker
                 filename = self.foldername + self.vars_string[i] + self.project_string
                 np.savetxt(filename, np.array(var[2]), fmt='%.3f', delimiter=',')
 
-
-def visualize_episode(env, agent, parameters):
-    episode_reward = 0.0
-    env.reset()  # Reset environment
-    agent.ledger.reset()  # Reset ledger
-    for timestep in range(parameters.num_timestep):  # Each timestep
-
-        # Get current state from environment
-        joint_state = []
-        for rover_id in range(parameters.num_rover): joint_state.append(
-            mod.to_tensor(env.get_state(rover_id, agent.ledger)))
-        joint_state_T = torch.cat(joint_state, 1)
-
-        # Get action
-        joint_action_prob = mod.to_numpy(agent.ac.actor_forward(joint_state_T))  # [probs, batch]
-        #actions = np.argmax(joint_action_prob, axis=0)  # Greedy max value action selection
-        greedy_actions = []  # Greedy actions breaking ties
-        for i in range(len(joint_action_prob[0])):
-            max = np.max(joint_action_prob[:, i])
-            greedy_actions.append(np.random.choice(np.where(max == joint_action_prob[:, i])[0]))# greedy_actions = np.random.choice(np.flatnonzero(prob == prob.max())) #TODO Break Argmax bias towards index clashes (use random choice between same values)
-
-        actions = np.array(greedy_actions)
-
-        # Run enviornment one step up and get reward
-        env.step(actions, agent.ledger)
-        joint_rewards = env.get_reward()
-        episode_reward += sum(joint_rewards) / parameters.coupling
-
-        env.visualize()
-    print agent.ledger.ledger
-
-    return episode_reward
-
-def trace_viz(env, agent, parameters):
-    episode_reward = 0.0
-    env.reset()  # Reset environment
-    agent.ledger.reset()  # Reset ledger
-    macro_experience = [[None, None, None, None] for _ in range(parameters.num_rover)]  # Bucket to store macro actions (time extended) experiences.
-    rover_path = [[(loc[0], loc[1])] for loc in env.rover_pos]
-    action_diversity = [[0, 0, 0, 0, 0,0,0] for _ in range(parameters.num_rover)]
-
-    for timestep in range(1, parameters.num_timestep+1): #Each timestep
-
-        # Get current state from environment
-        joint_state = []
-        for rover_id in range(parameters.num_rover): joint_state.append(mod.to_tensor(env.get_state(rover_id, agent.ledger)))
-        joint_state_T = torch.cat(joint_state, 1)
-
-        # Get action
-        joint_action_prob = mod.to_numpy(agent.ac.actor_forward(joint_state_T)) #[probs, batch]
-
-        greedy_actions = [] #Greedy actions breaking ties
-        for i in range(len(joint_action_prob[0])):
-            max = np.max(joint_action_prob[:,i])
-            greedy_actions.append(np.random.choice(np.where(max == joint_action_prob[:,i])[0]))
-        actions = np.array(greedy_actions)
-
-        #Track actions
-        for rover_id, a in enumerate(actions):
-            action_diversity[rover_id][a] += 1
-            if env.util_macro[rover_id][0]: action_diversity[rover_id][a] -= 1
-
-
-        #Macro action to macro (time-extended macro action)
-        for rover_id, entry in enumerate(env.util_macro):
-             if actions[rover_id] == 5 and entry[0] == False: #Macro action first state
-                 env.util_macro[rover_id][0] = True #Turn on is_currently_active?
-                 env.util_macro[rover_id][1] = True #Turn on is_activated_now?
-                 macro_experience[rover_id][0] = joint_state[rover_id]
-                 macro_experience[rover_id][2] = actions[rover_id]
-
-             if entry[0]:
-                 actions[rover_id] = 5 #Macro action continuing
-
-        # Run enviornment one step up and get reward
-        env.step(actions, agent.ledger)
-        joint_rewards = env.get_reward()
-        episode_reward += sum(joint_rewards)/parameters.coupling
-
-        #Process macro experiences and add to memory
-        for rover_id, exp in enumerate(macro_experience):
-            if env.util_macro[rover_id][2]: #If reached destination
-                env.util_macro[rover_id][2] = False
-                macro_experience[rover_id] = [None, None, None, None]
-
-        #Append rover path
-        for rover_id in range(parameters.num_rover): rover_path[rover_id].append((env.rover_pos[rover_id][0],env.rover_pos[rover_id][1]))
-
-
-    #Visualize
-    grid = [['-' for _ in range(env.dim_x)] for _ in range(env.dim_y)]
-
-    drone_symbol_bank = ["0", "1", '2', '3', '4', '5', '6','7','8','9','10','11']
-    # Draw in rover path
-    for rover_id in range(parameters.num_rover):
-        for time in range(parameters.num_timestep):
-            x = int(rover_path[rover_id][time][0]);
-            y = int(rover_path[rover_id][time][1])
-            # print x,y
-            grid[x][y] = drone_symbol_bank[rover_id]
-
-    # Draw in food
-    for loc, status in zip(env.poi_pos, env.poi_status):
-        x = int(loc[0]);
-        y = int(loc[1])
-        marker = 'I' if status else 'A'
-        grid[x][y] = marker
-
-    for row in grid:
-        print row
-    print
-    print action_diversity
-    print agent.ledger.ledger
-    print '------------------------------------------------------------------------'
-    return episode_reward
-
-def v_check(env, critic, params):
-    env.reset()
-    grid = [[None for _ in range(params.dim_x)] for _ in range(params.dim_y)]
-    for i in range(params.dim_x):
-        for j in range(params.dim_x):
-            env.rover_pos[0] = [i,j]
-            #env.poi_status[0] = False
-            state = env.get_state(0)
-            state = mod.to_tensor(state)
-            val = mod.to_numpy(critic.critic_forward(state)).flatten()[0]
-            grid[i][j] = "%0.2f" %val
-
-    env.reset()
-    for row in grid:
-        print row
-    print
-
-def actor_check(env, actor, params):
-    env.reset()
-    symbol = ['S','R', 'U', 'L', 'D']
-    grid = [[None for _ in range(params.dim_x)] for _ in range(params.dim_y)]
-    for i in range(params.dim_x):
-        for j in range(params.dim_x):
-            env.rover_pos[0] = [i,j]
-            #env.poi_status[0] = False
-            state = env.get_state(0)
-            state = mod.to_tensor(state)
-            action = mod.to_numpy(actor.actor_forward(state)).flatten()
-            action = np.argmax(action)
-            grid[i][j] = symbol[action]
-
-    env.reset()
-    for row in grid:
-        print row
-    print
-
-def add_experience(state, new_state, action, reward, agent):
-    agent.replay_buffer.add(1.0, [state, new_state, action, reward])
-
-
 if __name__ == "__main__":
     parameters = Parameters()  # Create the Parameters class
     env = Task_Rovers(parameters); tracker = Tracker(parameters, ['rewards'], '')
     all_agents = []
     for i in range(parameters.num_rover): all_agents.append(mod.A2C_Discrete(parameters, i)) #Create a multiagent team
 
+    #LEARNING LOOP
     for episode in range(1, parameters.num_episodes, 1): #Each episode
         episode_reward = 0.0; env.reset() #Reset environment
         for agent in all_agents: agent.ledger.reset() #Reset ledger
         macro_experience = [[None, None, None, None, rover_id] for rover_id in range(parameters.num_rover)] #Bucket to store macro actions (time extended) experiences.
+
+        #ONE EPISODE OF LEARNING
         for timestep in range(1, parameters.num_timestep+1): #Each timestep
 
             # Get current state from environment
@@ -555,14 +384,14 @@ if __name__ == "__main__":
             #Add to memory
             for agent_id, (state, new_state, action, reward) in enumerate(zip(joint_state, joint_next_state, actions, joint_rewards)):
                 if action == 5: continue #Skip the ones currently executing a macro action (not the one who just chose it).
-                add_experience(state, new_state, action, reward, all_agents[agent_id])
+                mod.add_experience(state, new_state, action, reward, all_agents[agent_id])
 
             #Process macro experiences and add to memory
-            for agent_id, exp in enumerate(macro_experience):
-                if env.util_macro[rover_id][2]: #If reached destination
-                    env.util_macro[rover_id][2] = False
-                    add_experience(macro_experience[rover_id][0], macro_experience[rover_id][1], macro_experience[rover_id][2], macro_experience[rover_id][3], all_agents[agent_id])
-                    macro_experience[rover_id] = [None, None, None, None, agent_id]
+            for id, exp in enumerate(macro_experience): #Id is common for both agent_id and rover_id
+                if env.util_macro[id][2]: #If reached destination
+                    env.util_macro[id][2] = False
+                    mod.add_experience(macro_experience[id][0], macro_experience[id][1], macro_experience[id][2], macro_experience[id][3], all_agents[id])
+                    macro_experience[id] = [None, None, None, None, id]
 
 
         #Gradient update periodically
