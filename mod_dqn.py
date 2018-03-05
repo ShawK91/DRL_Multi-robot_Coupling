@@ -13,9 +13,9 @@ from torch.optim import Adam
 
 
 class A2C_Discrete(object):
-    def __init__(self, args):
+    def __init__(self, args, agent_id):
 
-        self.args = args
+        self.args = args; self.id = agent_id
 
         # Create Actor and Critic Network
         self.ac = Actor_Critic(args.state_dim, args.action_dim, args)
@@ -31,7 +31,7 @@ class A2C_Discrete(object):
         # Hyper-parameters
         self.batch_size = args.batch_size
         self.gamma = args.gamma
-        self.criterion = nn.MSELoss() #nn.SmoothL1Loss()
+        self.criterion = nn.SmoothL1Loss()
 
     def sample_memory(self, episode):
         data = self.replay_buffer.sample(self.args.batch_size)
@@ -68,7 +68,7 @@ class A2C_Discrete(object):
             policy_loss =  -(dt * alogs)
             policy_loss = policy_loss.mean()
             policy_loss.backward(retain_graph=True)
-            #torch.nn.utils.clip_grad_norm(self.ac.parameters(), 40)
+            torch.nn.utils.clip_grad_norm(self.ac.parameters(), 10)
             self.actor_optim.step()
             self.ac.zero_grad()
 
@@ -88,7 +88,7 @@ class A2C_Discrete(object):
 
             loss = self.criterion(vals, targets)
             loss.backward(retain_graph = True)
-            #torch.nn.utils.clip_grad_norm(self.ac.parameters(), 40)
+            torch.nn.utils.clip_grad_norm(self.ac.parameters(), 10)
             self.critic_optim.step()
             self.ac.zero_grad()
             new_states.volatile = False
@@ -241,6 +241,8 @@ class Actor_Critic(nn.Module):
         #self.mmu.reset(batch_size)
         pass
 
+
+
 class Memory:   # stored as ( s, a, r, s_ ) in SumTree
     e = 0.01
     a = 0.6
@@ -329,7 +331,7 @@ class SumTree:
 
 def fanin_init(size, fanin=None):
     fanin = fanin or size[0]
-    v = 1. / np.sqrt(fanin)
+    #v = 1. / np.sqrt(fanin)
     v = 0.008
     return torch.Tensor(size).uniform_(-v, v)
 
