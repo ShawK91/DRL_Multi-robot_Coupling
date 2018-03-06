@@ -40,14 +40,39 @@ class A2C_Discrete(object):
         rewards = to_tensor(np.array([ o[1][3] for o in data])).unsqueeze(0)
         return states, new_states, actions, rewards, data
 
-    def update_actor(self, episode):
+    def compute_dpp(self, states):
+        vals = self.ac.critic_forward(states)
+
+        states = to_numpy(states)
+        mid_index = 180 / self.args.angle_res
+        coupling = self.args.coupling
+        dpp_sweep = [mid_index + i for i in range(int(-coupling/2), int(-coupling/2) + coupling, 1)]
+
+        for i in dpp_sweep:
+            states[i,:] += 2.0
+            vals = torch.cat((vals, self.ac.critic_forward(to_tensor(states))), 0)
+
+        return torch.max(vals, 0)[0].unsqueeze(0)
+
+
+
+
+
+    def update_actor(self, episode, is_dpp):
         # Sample batch
         states, new_states, actions, rewards, data = self.sample_memory(episode)
 
         if len(states) == 0: return
 
-        vals = self.ac.critic_forward(states)
-        new_vals = self.ac.critic_forward(new_states)
+        if is_dpp:
+            vals = self.compute_dpp(states)
+            new_vals = self.compute_dpp(new_states)
+
+        else:
+            vals = self.ac.critic_forward(states)
+            new_vals = self.ac.critic_forward(new_states)
+
+
         action_logs = self.ac.actor_forward(states)
 
         dt = rewards + self.gamma * new_vals - vals
@@ -151,7 +176,7 @@ class Ledger():
             if dist < min_dist:
                 min_dist = dist
                 closest_loc = [entries[0][0], entries[0][1]]
-        if min_dist == 1000: min_dist = -1
+        if min_dist == 1000: min_dist = -1.0
         return closest_loc, min_dist
 
     def reset(self):
@@ -167,7 +192,7 @@ class Ledger():
 
         #Delete entries
         for item in del_list:
-            self.ledger.remove(item) 
+            self.ledger.remove(item)
 
 class Actor_Critic(nn.Module):
     def __init__(self, num_input, num_actions, args):
@@ -353,16 +378,17 @@ class Task_Rovers:
 
         self_x = self.rover_pos[rover_id][0]; self_y = self.rover_pos[rover_id][1]
 
-        state = np.zeros(((360 / self.params.angle_res), 2))  # FORMAT: [bracket] = (drone_avg_dist, drone_number, food_avg_dist, food_number_item, reward ......]
-        temp_poi_dist_list = [[] for _ in xrange(360 / self.params.angle_res)]
-        temp_rover_dist_list = [[] for _ in xrange(360 / self.params.angle_res)]
+        rover_state = [0.0 for _ in range(360 / self.params.angle_res)]
+        poi_state = [0.0 for _ in range(360 / self.params.angle_res)]
+        temp_poi_dist_list = [[] for _ in range(360 / self.params.angle_res)]
+        temp_rover_dist_list = [[] for _ in range(360 / self.params.angle_res)]
 
         # Log all distance into brackets for POIs
+        x2 = -1.0; y2 = 0.0
         for loc, status in zip(self.poi_pos, self.poi_status):
             if status == True: continue #If accessed ignore
 
-            x1 = loc[0] - self_x; x2 = -1.0
-            y1 = loc[1] - self_y; y2 = 0.0
+            x1 = loc[0] - self_x; y1 = loc[1] - self_y
             angle, dist = self.get_angle_dist(x1, y1, x2, y2)
             if dist > self.params.obs_radius: continue #Observability radius
 
@@ -373,8 +399,7 @@ class Task_Rovers:
         for id, loc, in enumerate(self.rover_pos):
             if id == rover_id: continue #Ignore self
 
-            x1 = loc[0] - self_x; x2 = -1.0
-            y1 = loc[1] - self_y; y2 = 0.0
+            x1 = loc[0] - self_x; y1 = loc[1] - self_y
             angle, dist = self.get_angle_dist(x1, y1, x2, y2)
             if dist > self.params.obs_radius: continue #Observability radius
 
@@ -387,20 +412,21 @@ class Task_Rovers:
             # POIs
             num_poi = len(temp_poi_dist_list[bracket])
             if num_poi > 0:
-                if self.params.sensor_model == 1: state[bracket][0] = sum(temp_poi_dist_list[bracket]) / num_poi #Density Sensor
-                else: state[bracket][0] = min(temp_poi_dist_list[bracket])  #Minimum Sensor
-            else: state[bracket][0] = -1
+                if self.params.sensor_model == 1: poi_state[bracket] = sum(temp_poi_dist_list[bracket]) / num_poi #Density Sensor
+                else: poi_state[bracket] = min(temp_poi_dist_list[bracket])  #Minimum Sensor
+            else: poi_state[bracket] = -1.0
 
             #Rovers
             num_rover = len(temp_rover_dist_list[bracket])
             if num_rover > 0:
-                if self.params.sensor_model == 1: state[bracket][1] = sum(temp_rover_dist_list[bracket]) / num_rover #Density Sensor
-                else: state[bracket][1] = min(temp_rover_dist_list[bracket]) #Minimum Sensor
-            else: state[bracket][1] = -1
+                if self.params.sensor_model == 1: rover_state[bracket] = sum(temp_rover_dist_list[bracket]) / num_rover #Density Sensor
+                else: rover_state[bracket] = min(temp_rover_dist_list[bracket]) #Minimum Sensor
+            else: rover_state[bracket] = -1.0
 
-        state = state.flatten()
+        state = poi_state + rover_state #Append rover and poi to form the full state
+
         #Append wall info
-        state = np.concatenate((state, np.array([-1.0, -1.0, -1.0, -1.0])))
+        state = state + [-1.0, -1.0, -1.0, -1.0]
         if self_x <= self.params.obs_radius: state[-4] = self_x
         if self.params.dim_x - self_x <= self.params.obs_radius: state[-3] = self.params.dim_x - self_x
         if self_y <= self.params.obs_radius :state[-2] = self_y
@@ -412,8 +438,8 @@ class Task_Rovers:
         self.ledger_closest[rover_id] = [closest_loc[0], closest_loc[1]]
 
         #if rover_id == 1: state =  np.zeros((720 / self.params.angle_res)) - 2 #TODO TEST
-        state = np.concatenate((state, np.array([min_dist])))
-        state = unsqueeze(state, 1)
+        state = state + [min_dist]
+        state = unsqueeze(np.array(state), 1)
         return state
 
     def get_angle_dist(self, x1, y1, x2,y2):  # Computes angles and distance between two predators relative to (1,0) vector (x-axis)
@@ -650,39 +676,6 @@ def prob_choice(prob):
 
 def soft_argmax(prob):
     return np.random.choice(np.flatnonzero(prob == prob.max()))
-
-def visualize_episode(env, agent, parameters):
-    episode_reward = 0.0
-    env.reset()  # Reset environment
-    agent.ledger.reset()  # Reset ledger
-    for timestep in range(parameters.num_timestep):  # Each timestep
-
-        # Get current state from environment
-        joint_state = []
-        for rover_id in range(parameters.num_rover): joint_state.append(
-            mod.to_tensor(env.get_state(rover_id, agent.ledger)))
-        joint_state_T = torch.cat(joint_state, 1)
-
-        # Get action
-        joint_action_prob = mod.to_numpy(agent.ac.actor_forward(joint_state_T))  # [probs, batch]
-        #actions = np.argmax(joint_action_prob, axis=0)  # Greedy max value action selection
-        greedy_actions = []  # Greedy actions breaking ties
-        for i in range(len(joint_action_prob[0])):
-            max = np.max(joint_action_prob[:, i])
-            greedy_actions.append(np.random.choice(np.where(max == joint_action_prob[:, i])[0]))# greedy_actions = np.random.choice(np.flatnonzero(prob == prob.max())) #TODO Break Argmax bias towards index clashes (use random choice between same values)
-
-        actions = np.array(greedy_actions)
-
-        # Run enviornment one step up and get reward
-        env.step(actions, agent.ledger)
-        joint_rewards = env.get_reward()
-        episode_reward += sum(joint_rewards) / parameters.coupling
-
-        env.visualize()
-    print agent.ledger.ledger
-
-    return episode_reward
-
 
 
 def v_check(env, critic, params):

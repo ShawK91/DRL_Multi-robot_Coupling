@@ -9,16 +9,17 @@ class Parameters:
 
         #NN specifics
         self.num_hnodes = self.num_mem = 100
+        self.is_dpp = True
 
         # Train data
         self.batch_size = 10000
         self.num_episodes = 500000
-        self.actor_epoch = 5; self.actor_lr = 0.005
-        self.critic_epoch = 5; self.critic_lr = 0.005
+        self.actor_epoch = 2; self.actor_lr = 0.005
+        self.critic_epoch = 2; self.critic_lr = 0.005
         self.update_frequency = 20
 
         #Rover domain
-        self.dim_x = self.dim_y = 25; self.obs_radius = 3; self.act_dist = 1.5; self.angle_res = 15
+        self.dim_x = self.dim_y = 25; self.obs_radius = 10; self.act_dist = 2.5; self.angle_res = 15
         self.num_poi = 10; self.num_rover = 8; self.num_timestep = 25
         self.poi_rand = 1; self.coupling = 4; self.rover_speed = 1
         self.is_homogeneous = True  #False --> Heterogenenous Actors
@@ -28,7 +29,7 @@ class Parameters:
 
         #Dependents
         self.state_dim = 2*360 / self.angle_res + 5
-        self.action_dim = 7
+        self.action_dim = 5
         self.epsilon = 0.5; self.alpha = 0.9; self.gamma = 0.99
         self.reward_crush = 0.1 #Crush reward to prevent numerical issues
 
@@ -161,7 +162,7 @@ if __name__ == "__main__":
             tracker.update([episode_reward], episode)
             for agent in all_agents:
                 agent.update_critic(episode)
-                agent.update_actor(episode)
+                agent.update_actor(episode, is_dpp = parameters.is_dpp)
                 if parameters.is_homogeneous: break #Break after one round of training
             print 'Gen', episode, 'Reward', episode_reward, 'Aggregrate', "%0.2f" % tracker.all_tracker[0][1], 'Epsilon', "%0.2f" %parameters.epsilon#, 'Mem_size', agent.replay_buffer.size() 'Exp_Success:', "%0.2f" % (explore_success/episode),
             env.trace_viz()
