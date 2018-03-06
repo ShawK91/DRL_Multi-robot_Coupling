@@ -18,9 +18,9 @@ class Parameters:
         self.update_frequency = 20
 
         #Rover domain
-        self.dim_x = self.dim_y = 10; self.obs_radius = 3; self.act_dist = 1.0; self.angle_res = 15
-        self.num_poi = 1; self.num_rover = 2; self.num_timestep = 15
-        self.poi_rand = 1; self.coupling = 2; self.rover_speed = 1
+        self.dim_x = self.dim_y = 25; self.obs_radius = 3; self.act_dist = 1.5; self.angle_res = 15
+        self.num_poi = 10; self.num_rover = 8; self.num_timestep = 25
+        self.poi_rand = 1; self.coupling = 4; self.rover_speed = 1
         self.is_homogeneous = True  #False --> Heterogenenous Actors
         self.sensor_model = 2 #1: Density Sensor
                               #2: Closest Sensor
@@ -39,7 +39,7 @@ class Parameters:
         if not os.path.exists(self.save_foldername): os.makedirs(self.save_foldername)
 
         #Unit tests (Simply changes the rover/poi init locations)
-        self.unit_test = 2 #0: None
+        self.unit_test = 0 #0: None
                            #1: Single Agent
                            #2: Multiagent 2-coupled
 
@@ -162,6 +162,7 @@ if __name__ == "__main__":
             for agent in all_agents:
                 agent.update_critic(episode)
                 agent.update_actor(episode)
+                if parameters.is_homogeneous: break #Break after one round of training
             print 'Gen', episode, 'Reward', episode_reward, 'Aggregrate', "%0.2f" % tracker.all_tracker[0][1], 'Epsilon', "%0.2f" %parameters.epsilon#, 'Mem_size', agent.replay_buffer.size() 'Exp_Success:', "%0.2f" % (explore_success/episode),
             env.trace_viz()
 

@@ -52,6 +52,7 @@ class A2C_Discrete(object):
 
         dt = rewards + self.gamma * new_vals - vals
         dt = to_numpy(dt)
+        #print np.max(dt), np.min(dt)
 
         #Update priorities
         for i in range(len(data)): self.replay_buffer.update(data[i][0], abs(dt[0][i]))
@@ -84,6 +85,9 @@ class A2C_Discrete(object):
             new_states.volatile = True
             new_vals = self.ac.critic_forward(new_states)
             targets = rewards + self.gamma * new_vals
+
+            #print 'Val', np.max(to_numpy(vals).flatten()), np.min(to_numpy(vals).flatten())
+            #print 'Targets', np.max(to_numpy(targets).flatten()), np.min(to_numpy(targets).flatten())
 
             loss = self.criterion(vals, targets)
             loss.backward(retain_graph = True)
@@ -163,7 +167,7 @@ class Ledger():
 
         #Delete entries
         for item in del_list:
-            self.ledger.remove(item)
+            self.ledger.remove(item) 
 
 class Actor_Critic(nn.Module):
     def __init__(self, num_input, num_actions, args):
