@@ -14,14 +14,14 @@ class Parameters:
         # Train data
         self.batch_size = 10000
         self.num_episodes = 500000
-        self.actor_epoch = 2; self.actor_lr = 0.005
-        self.critic_epoch = 2; self.critic_lr = 0.005
+        self.actor_epoch = 1; self.actor_lr = 0.005
+        self.critic_epoch = 1; self.critic_lr = 0.005
         self.update_frequency = 20
 
         #Rover domain
-        self.dim_x = self.dim_y = 25; self.obs_radius = 10; self.act_dist = 2.5; self.angle_res = 15
-        self.num_poi = 10; self.num_rover = 8; self.num_timestep = 25
-        self.poi_rand = 1; self.coupling = 4; self.rover_speed = 1
+        self.dim_x = self.dim_y = 20; self.obs_radius = 10; self.act_dist = 1.5; self.angle_res = 20
+        self.num_poi = 10; self.num_rover = 6; self.num_timestep = 20
+        self.poi_rand = 1; self.coupling = 5; self.rover_speed = 1
         self.is_homogeneous = True  #False --> Heterogenenous Actors
         self.sensor_model = 2 #1: Density Sensor
                               #2: Closest Sensor
@@ -31,7 +31,7 @@ class Parameters:
         self.state_dim = 2*360 / self.angle_res + 5
         self.action_dim = 5
         self.epsilon = 0.5; self.alpha = 0.9; self.gamma = 0.99
-        self.reward_crush = 0.1 #Crush reward to prevent numerical issues
+        self.reward_crush = 0.2 #Crush reward to prevent numerical issues
 
         #Replay Buffer
         self.buffer_size = 100000

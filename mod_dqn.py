@@ -46,7 +46,9 @@ class A2C_Discrete(object):
         states = to_numpy(states)
         mid_index = 180 / self.args.angle_res
         coupling = self.args.coupling
-        dpp_sweep = [mid_index + i for i in range(int(-coupling/2), int(-coupling/2) + coupling, 1)]
+        #dpp_sweep = [mid_index + i for i in range(int(-coupling/2), int(-coupling/2) + coupling, 1)]
+
+        dpp_sweep = random.sample(range(360/self.args.angle_res), coupling+1)
 
         for i in dpp_sweep:
             states[i,:] += 2.0
@@ -423,7 +425,7 @@ class Task_Rovers:
                 else: rover_state[bracket] = min(temp_rover_dist_list[bracket]) #Minimum Sensor
             else: rover_state[bracket] = -1.0
 
-        state = poi_state + rover_state #Append rover and poi to form the full state
+        state = rover_state + poi_state #Append rover and poi to form the full state
 
         #Append wall info
         state = state + [-1.0, -1.0, -1.0, -1.0]
