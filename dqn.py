@@ -10,7 +10,7 @@ class Parameters:
         #NN specifics
         self.num_hnodes = self.num_mem = 100
         self.is_dpp = True
-        self.target_synch = 20
+        self.target_synch = 500
 
         # Train data
         self.batch_size = 10000
@@ -20,7 +20,7 @@ class Parameters:
         self.update_frequency = 20
 
         #Rover domain
-        self.dim_x = self.dim_y = 20; self.obs_radius = 10; self.act_dist = 1.5; self.angle_res = 20
+        self.dim_x = self.dim_y = 20; self.obs_radius = 10; self.act_dist = 2.5; self.angle_res = 20
         self.num_poi = 10; self.num_rover = 6; self.num_timestep = 20
         self.poi_rand = 1; self.coupling = 5; self.rover_speed = 1
         self.is_homogeneous = True  #False --> Heterogenenous Actors
@@ -35,7 +35,7 @@ class Parameters:
         self.reward_crush = 0.2 #Crush reward to prevent numerical issues
 
         #Replay Buffer
-        self.buffer_size = 100000
+        self.buffer_size = 1000000
 
         self.save_foldername = 'R_Block/'
         if not os.path.exists(self.save_foldername): os.makedirs(self.save_foldername)
@@ -166,7 +166,7 @@ if __name__ == "__main__":
                 agent.update_actor(episode, is_dpp = parameters.is_dpp)
                 if parameters.is_homogeneous: break #Break after one round of training
             print 'Gen', episode, 'Reward', episode_reward, 'Aggregrate', "%0.2f" % tracker.all_tracker[0][1], 'Epsilon', "%0.2f" %parameters.epsilon#, 'Mem_size', agent.replay_buffer.size() 'Exp_Success:', "%0.2f" % (explore_success/episode),
-            env.trace_viz()
+            #env.trace_viz()
         if episode % parameters.target_synch == 0:
             agent.synchronize()
 

@@ -34,9 +34,15 @@ class A2C_Discrete(object):
         self.criterion = nn.SmoothL1Loss()
 
     def synchronize(self):
-        for param, target_param in zip(list(self.ac.parameters()), list(self.target_net.parameters())):
-            param.data = target_param.data
+        # for param, target_param in zip(list(self.ac.parameters()), list(self.target_net.parameters())):
+        #     param.data = target_param.data
 
+        self.ac.w_critic1.data = self.target_net.w_critic1.data
+        self.ac.w_critic2.data = self.target_net.w_critic2.data
+        self.ac.w_critic3.data = self.target_net.w_critic3.data
+        #self.ac.w_critic4.data = self.target_net.w_critic4.data
+        #self.ac.w_critic5.data = self.target_net.w_critic5.data
+        self.ac.w_critic6.data = self.target_net.w_critic6.data
 
     def sample_memory(self, episode):
         data = self.replay_buffer.sample(self.args.batch_size)
@@ -73,11 +79,11 @@ class A2C_Discrete(object):
             new_vals = self.compute_dpp(new_states)
 
         else:
-            vals = self.target_net.critic_forward(states)
-            new_vals = self.target_net.critic_forward(new_states)
+            vals = self.ac.critic_forward(states)
+            new_vals = self.ac.critic_forward(new_states)
 
 
-        action_logs = self.target_net.actor_forward(states)
+        action_logs = self.ac.actor_forward(states)
 
         dt = rewards + self.gamma * new_vals - vals
         dt = to_numpy(dt)
@@ -97,9 +103,9 @@ class A2C_Discrete(object):
             policy_loss =  -(dt * alogs)
             policy_loss = policy_loss.mean()
             policy_loss.backward(retain_graph=True)
-            torch.nn.utils.clip_grad_norm(self.target_net.parameters(), 10)
+            torch.nn.utils.clip_grad_norm(self.ac.parameters(), 10)
             self.actor_optim.step()
-            self.target_net.zero_grad()
+            self.ac.zero_grad()
 
     def update_critic(self, episode):
         # Sample batch
@@ -169,8 +175,8 @@ class Actor_Critic(nn.Module):
         self.w_actor1 = Parameter(torch.rand(args.num_hnodes, num_input), requires_grad=1)
         self.w_actor2 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
         self.w_actor3 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
-        self.w_actor4 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
-        self.w_actor5 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        #self.w_actor4 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        #self.w_actor5 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
         self.w_actor6 = Parameter(torch.rand(num_actions, args.num_hnodes), requires_grad=1)
 
 
@@ -182,8 +188,8 @@ class Actor_Critic(nn.Module):
         self.w_critic1 = Parameter(torch.rand(args.num_hnodes, num_input), requires_grad=1)
         self.w_critic2 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
         self.w_critic3 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
-        self.w_critic4 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
-        self.w_critic5 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        #self.w_critic4 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
+        #self.w_critic5 = Parameter(torch.rand(args.num_hnodes, args.num_hnodes), requires_grad=1)
         self.w_critic6 = Parameter(torch.rand(1, args.num_hnodes), requires_grad=1)
 
         for param in self.parameters():
