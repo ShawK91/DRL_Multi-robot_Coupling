@@ -18,6 +18,7 @@ class A2C_Discrete(object):
 
         # Create Actor and Critic Network
         self.ac = Actor_Critic(args.state_dim, args.action_dim, args)
+        self.target_net = Actor_Critic(args.state_dim, args.action_dim, args)
         self.ledger = Ledger(max_entries=10000, decay_rate=0.9)
 
         #Optimizers
@@ -31,6 +32,11 @@ class A2C_Discrete(object):
         self.batch_size = args.batch_size
         self.gamma = args.gamma
         self.criterion = nn.SmoothL1Loss()
+
+    def synchronize(self):
+        for param, target_param in zip(list(self.ac.parameters()), list(self.target_net.parameters())):
+            param.data = target_param.data
+
 
     def sample_memory(self, episode):
         data = self.replay_buffer.sample(self.args.batch_size)
@@ -56,10 +62,6 @@ class A2C_Discrete(object):
 
         return torch.max(vals, 0)[0].unsqueeze(0)
 
-
-
-
-
     def update_actor(self, episode, is_dpp):
         # Sample batch
         states, new_states, actions, rewards, data = self.sample_memory(episode)
@@ -71,11 +73,11 @@ class A2C_Discrete(object):
             new_vals = self.compute_dpp(new_states)
 
         else:
-            vals = self.ac.critic_forward(states)
-            new_vals = self.ac.critic_forward(new_states)
+            vals = self.target_net.critic_forward(states)
+            new_vals = self.target_net.critic_forward(new_states)
 
 
-        action_logs = self.ac.actor_forward(states)
+        action_logs = self.target_net.actor_forward(states)
 
         dt = rewards + self.gamma * new_vals - vals
         dt = to_numpy(dt)
@@ -95,9 +97,9 @@ class A2C_Discrete(object):
             policy_loss =  -(dt * alogs)
             policy_loss = policy_loss.mean()
             policy_loss.backward(retain_graph=True)
-            torch.nn.utils.clip_grad_norm(self.ac.parameters(), 10)
+            torch.nn.utils.clip_grad_norm(self.target_net.parameters(), 10)
             self.actor_optim.step()
-            self.ac.zero_grad()
+            self.target_net.zero_grad()
 
     def update_critic(self, episode):
         # Sample batch
@@ -108,9 +110,9 @@ class A2C_Discrete(object):
 
         for epoch in range(self.args.critic_epoch):
 
-            vals = self.ac.critic_forward(states);
+            vals = self.target_net.critic_forward(states);
             new_states.volatile = True
-            new_vals = self.ac.critic_forward(new_states)
+            new_vals = self.target_net.critic_forward(new_states)
             targets = rewards + self.gamma * new_vals
 
             #print 'Val', np.max(to_numpy(vals).flatten()), np.min(to_numpy(vals).flatten())
@@ -118,50 +120,11 @@ class A2C_Discrete(object):
 
             loss = self.criterion(vals, targets)
             loss.backward(retain_graph = True)
-            torch.nn.utils.clip_grad_norm(self.ac.parameters(), 10)
+            torch.nn.utils.clip_grad_norm(self.target_net.parameters(), 10)
             self.critic_optim.step()
-            self.ac.zero_grad()
+            self.target_net.zero_grad()
             new_states.volatile = False
 
-    def select_action(self, s_t, decay_epsilon=True):
-        action = to_numpy(self.actor(to_tensor(np.array([s_t])))).squeeze(0)
-        action += self.is_training * max(self.epsilon, 0) * self.random_process.sample()
-        action = np.clip(action, -1., 1.)
-
-        if decay_epsilon:
-            self.epsilon -= self.depsilon
-
-        self.a_t = action
-        return action
-
-    def reset(self, obs):
-        self.s_t = obs
-        self.random_process.reset_states()
-
-    def load_weights(self, output):
-        if output is None: return
-
-        self.actor.load_state_dict(
-            torch.load('{}/actor.pkl'.format(output))
-        )
-
-        self.critic.load_state_dict(
-            torch.load('{}/critic.pkl'.format(output))
-        )
-
-    def save_model(self, output):
-        torch.save(
-            self.actor.state_dict(),
-            '{}/actor.pkl'.format(output)
-        )
-        torch.save(
-            self.critic.state_dict(),
-            '{}/critic.pkl'.format(output)
-        )
-
-    def seed(self, s):
-        torch.manual_seed(s)
-        torch.cuda.manual_seed(s)
 
 class Ledger():
     def __init__(self, max_entries, decay_rate):
@@ -234,7 +197,7 @@ class Actor_Critic(nn.Module):
     def actor_forward(self, state):
         #Primitive sub-network
         out = F.tanh(self.w_actor1.mm(state))
-        #out = F.leaky_relu(self.w_actor2.mm(out))
+        out = F.tanh(self.w_actor2.mm(out))
         #out = F.leaky_relu(self.w_actor3.mm(out))
         #out = F.leaky_relu(self.w_actor4.mm(out))
         #out = F.relu(self.w_actor5.mm(out))
@@ -258,7 +221,7 @@ class Actor_Critic(nn.Module):
 
     def critic_forward(self, state):
         out = F.tanh(self.w_critic1.mm(state))
-        #out = F.leaky_relu(self.w_critic2.mm(out))
+        out = F.tanh(self.w_critic2.mm(out))
         #out = F.leaky_relu(self.w_critic3.mm(out))
         #out = F.leaky_relu(self.w_critic4.mm(out))
         #out = F.relu(self.w_critic5.mm(out))
@@ -270,6 +233,7 @@ class Actor_Critic(nn.Module):
         pass
 
 class Task_Rovers:
+
     def __init__(self, parameters):
         self.params = parameters; self.dim_x = parameters.dim_x; self.dim_y = parameters.dim_y
 

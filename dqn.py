@@ -10,6 +10,7 @@ class Parameters:
         #NN specifics
         self.num_hnodes = self.num_mem = 100
         self.is_dpp = True
+        self.target_synch = 20
 
         # Train data
         self.batch_size = 10000
@@ -30,7 +31,7 @@ class Parameters:
         #Dependents
         self.state_dim = 2*360 / self.angle_res + 5
         self.action_dim = 5
-        self.epsilon = 0.5; self.alpha = 0.9; self.gamma = 0.99
+        self.epsilon = 0.2; self.alpha = 0.9; self.gamma = 0.99
         self.reward_crush = 0.2 #Crush reward to prevent numerical issues
 
         #Replay Buffer
@@ -166,6 +167,8 @@ if __name__ == "__main__":
                 if parameters.is_homogeneous: break #Break after one round of training
             print 'Gen', episode, 'Reward', episode_reward, 'Aggregrate', "%0.2f" % tracker.all_tracker[0][1], 'Epsilon', "%0.2f" %parameters.epsilon#, 'Mem_size', agent.replay_buffer.size() 'Exp_Success:', "%0.2f" % (explore_success/episode),
             env.trace_viz()
+        if episode % parameters.target_synch == 0:
+            agent.synchronize()
 
         #if episode % 200 == 0: visualize_episode(env, agent, parameters)
         #if episode % parameters.update_frequency == 0: trace_viz(env, agent, parameters)
